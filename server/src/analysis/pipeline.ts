@@ -203,6 +203,14 @@ const SUNG_EVENT_PROXIMITY_SEC = 5;
 const SUNG_RUN_MAX_DURATION_SEC = 120;
 const MUSICAL_EVENT_RE = /chant|musique|joue|guitare|piano|batterie|basse|synth|siffl|fredonn/i;
 
+// « Pont chanté » : deux passages joués séparés seulement par du chant
+// transcrit (paroles éparses de la chanteuse par-dessus le morceau) sont un
+// seul et même morceau. Signature très différente d'une vraie discussion :
+// un unique locuteur d'un bout à l'autre ET une densité de mots très faible
+// (chant étiré ~0,6 mot/s vs parole ~1,8-2,5 mot/s), sur une zone bornée.
+const SUNG_BRIDGE_MAX_ZONE_SEC = 180;
+const SUNG_BRIDGE_MAX_WORDS_PER_SEC = 1.0;
+
 interface MusicSpan {
   start: number;
   end: number;
@@ -253,8 +261,38 @@ export function detectMusicSpans(words: Word[], log: Logger): MusicSpan[] {
     merged.push({ ...span });
   }
 
+  mergeSungBridges(spoken, merged, log);
   extendSpansOverSinging(words, merged, log);
   return merged;
+}
+
+/** Fusionne les passages séparés seulement par un « pont chanté » (voir haut). */
+function mergeSungBridges(
+  spoken: (Word & { start: number })[],
+  spans: MusicSpan[],
+  log: Logger,
+): void {
+  for (let i = 0; i < spans.length - 1; ) {
+    const a = spans[i];
+    const b = spans[i + 1];
+    const zoneDuration = b.start - a.end;
+    const zoneWords = spoken.filter((w) => w.start > a.end && w.start < b.start);
+    const speakers = new Set(zoneWords.map((w) => w.speakerId));
+    const density = zoneWords.length / zoneDuration;
+    if (
+      zoneDuration <= SUNG_BRIDGE_MAX_ZONE_SEC &&
+      speakers.size === 1 &&
+      density <= SUNG_BRIDGE_MAX_WORDS_PER_SEC
+    ) {
+      log(
+        `pont chanté : zone ${formatTimecode(a.end)}–${formatTimecode(b.start)} (${zoneWords.length} mots, ${density.toFixed(2)} mot/s, 1 locuteur) → fusion des deux passages`,
+      );
+      a.end = b.end;
+      spans.splice(i + 1, 1);
+    } else {
+      i++;
+    }
+  }
 }
 
 /** Étend les passages sur les runs chantés adjacents (voir bloc ci-dessus). */
