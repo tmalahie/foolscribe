@@ -201,12 +201,13 @@ export function RecordingPage() {
     setEditMode(true);
   };
 
-  const addEntry = () => {
-    setDraftEntry({
-      timecodeSec: Math.floor(currentTime),
-      type: 'discussion',
-      text: '',
-    });
+  const addEntry = (type: 'discussion' | 'music') => {
+    // Préremplie au timecode courant du lecteur.
+    setDraftEntry(
+      type === 'music'
+        ? { timecodeSec: Math.floor(currentTime), type: 'music' }
+        : { timecodeSec: Math.floor(currentTime), type: 'discussion', text: '' },
+    );
     setEditingIndex(null);
   };
 
@@ -397,12 +398,20 @@ export function RecordingPage() {
                   </h2>
                   <div className="flex items-center gap-2">
                     {editMode && (
-                      <button
-                        onClick={addEntry}
-                        className="rounded-lg border border-zinc-700 px-2.5 py-1 text-xs text-zinc-300 hover:bg-zinc-800"
-                      >
-                        + Ajouter une ligne
-                      </button>
+                      <>
+                        <button
+                          onClick={() => addEntry('discussion')}
+                          className="rounded-lg border border-zinc-700 px-2.5 py-1 text-xs text-zinc-300 hover:bg-zinc-800"
+                        >
+                          + Discussion
+                        </button>
+                        <button
+                          onClick={() => addEntry('music')}
+                          className="rounded-lg border border-zinc-700 px-2.5 py-1 text-xs text-violet-400 hover:bg-zinc-800"
+                        >
+                          + ♪ Musique
+                        </button>
+                      </>
                     )}
                     <button
                       onClick={() => void toggleEditMode()}
