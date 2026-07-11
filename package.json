@@ -1,0 +1,20 @@
+{
+  "name": "foolscribe",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Gestion et analyse des enregistrements de répétitions de Fools Mojo",
+  "workspaces": [
+    "server",
+    "web"
+  ],
+  "scripts": {
+    "dev": "concurrently -n server,web -c blue,magenta \"npm run dev -w server\" \"npm run dev -w web\"",
+    "build": "npm run build -w web && npm run build -w server",
+    "start": "npm run start -w server",
+    "typecheck": "npm run typecheck -w server && npm run typecheck -w web",
+    "get-refresh-token": "npm run get-refresh-token -w server"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.0"
+  }
+}

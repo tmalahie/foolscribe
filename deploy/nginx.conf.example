@@ -1,0 +1,55 @@
+# foolscribe — reverse proxy nginx (à adapter : domaine, chemins).
+# HTTPS obligatoire (PWA + service worker + Google Sign-In).
+# Certificats : certbot --nginx -d foolscribe.example.com
+
+server {
+    listen 80;
+    server_name foolscribe.example.com;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name foolscribe.example.com;
+
+    # Renseignés par certbot :
+    ssl_certificate     /etc/letsencrypt/live/foolscribe.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/foolscribe.example.com/privkey.pem;
+
+    # Uploads d'enregistrements (fichiers audio volumineux)
+    client_max_body_size 3G;
+
+    # API → Node
+    location /api/ {
+        proxy_pass http://127.0.0.1:3001;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_request_buffering off;   # stream les gros uploads vers Node
+        proxy_read_timeout 600s;       # uploads/mirrors longs
+        proxy_send_timeout 600s;
+    }
+
+    # Front statique (build Vite)
+    root /opt/foolscribe/web/dist;
+    index index.html;
+
+    # Le service worker et le manifest ne doivent pas être mis en cache agressivement
+    location = /sw.js {
+        add_header Cache-Control "no-cache";
+    }
+    location = /manifest.webmanifest {
+        add_header Cache-Control "no-cache";
+    }
+
+    # Assets fingerprintés → cache long
+    location /assets/ {
+        add_header Cache-Control "public, max-age=31536000, immutable";
+    }
+
+    # SPA fallback
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}
