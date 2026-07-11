@@ -542,14 +542,7 @@ function TimelineRow({
             )}
           </span>
         ) : (
-          <span className="text-sm text-zinc-200">
-            {entry.speaker && (
-              <span className="mr-1.5 font-medium text-zinc-400">
-                {entry.speaker} —
-              </span>
-            )}
-            {entry.text}
-          </span>
+          <span className="text-sm text-zinc-200">{entry.text}</span>
         )}
       </button>
       {onEdit && (
@@ -581,7 +574,6 @@ function EntryEditor({
   const [endTimecode, setEndTimecode] = useState(
     entry.endSec != null ? formatTimecode(entry.endSec) : '',
   );
-  const [speaker, setSpeaker] = useState(entry.speaker ?? '');
   const [text, setText] = useState(entry.text ?? '');
   const [busy, setBusy] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
@@ -612,7 +604,6 @@ function EntryEditor({
       updated = {
         timecodeSec,
         type: 'discussion',
-        ...(speaker.trim() ? { speaker: speaker.trim() } : {}),
         text: text.trim(),
       };
     }
@@ -649,7 +640,7 @@ function EntryEditor({
           placeholder="m:ss"
           className="w-20 rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1.5 text-center font-mono text-xs outline-none focus:border-amber-400"
         />
-        {isMusic ? (
+        {isMusic && (
           <>
             <span className="text-sm text-violet-400">♪ [MUSIQUE] jusqu'à</span>
             <input
@@ -659,13 +650,6 @@ function EntryEditor({
               className="w-20 rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1.5 text-center font-mono text-xs outline-none focus:border-amber-400"
             />
           </>
-        ) : (
-          <input
-            value={speaker}
-            onChange={(e) => setSpeaker(e.target.value)}
-            placeholder="Qui ? (optionnel)"
-            className="w-36 rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1.5 text-xs outline-none focus:border-amber-400"
-          />
         )}
       </div>
       {!isMusic && (

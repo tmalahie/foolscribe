@@ -311,7 +311,6 @@ function buildTranscript(words: Word[], musicSpans: MusicSpan[]): string {
 
 interface DiscussionEntry {
   timecodeSec: number;
-  speaker?: string;
   text: string;
 }
 
@@ -331,11 +330,6 @@ const TIMELINE_TOOL: Anthropic.Tool = {
               type: 'integer',
               description:
                 'Timecode de début en secondes, recopié depuis la valeur t=Ns de la transcription (jamais inventé)',
-            },
-            speaker: {
-              type: 'string',
-              description:
-                "Prénom du locuteur principal de l'entrée ; omettre si ambigu",
             },
             text: {
               type: 'string',
@@ -372,7 +366,7 @@ Le but est de générer un résumé de la répétition sous la forme d'une timel
 Consignes :
 - Ne produis QUE des entrées de discussion : résumé rapide et direct des décisions, retours ou problèmes (ex. « Flavien propose d'ajouter un solo de guitare après le 2e refrain », « Le refrain manque d'énergie : montée progressive en intensité », « Décision de rejouer le morceau depuis le début »). Les passages [MUSIQUE] seront réinjectés automatiquement : ne crée AUCUNE entrée pour eux.
 - Regroupe par idée : une entrée par décision/retour/sujet, pas une par phrase. timecodeSec = la valeur t= de la première ligne du passage résumé.
-- Noms : déduis quel speaker_N correspond à quel musicien grâce aux prénoms cités dans les échanges et au contexte, puis utilise les vrais prénoms dans les textes et le champ speaker. Si un locuteur reste ambigu, utilise une tournure impersonnelle et omets le champ speaker.
+- Noms : la diarisation est imparfaite (elle rate parfois un musicien présent, ce qui décale tout le mapping). N'utilise un prénom dans un texte que si l'identification est solide (la personne est nommée ou interpellée dans l'échange lui-même) ; au moindre doute, préfère une tournure impersonnelle (« proposition d'ajouter un solo… », « décision de… ») — une timeline sans prénom vaut mieux qu'une timeline avec le mauvais prénom.
 - Quand quelqu'un chantonne ou fredonne une mélodie pour illustrer un propos pendant une discussion, ce n'est PAS un passage musical ; ça fait partie de la discussion.
 
 --- TRANSCRIPTION ---
@@ -433,7 +427,6 @@ export async function runPipeline(recordingId: number): Promise<Timeline> {
     ...discussionEntries.map((e) => ({
       timecodeSec: Math.max(0, Math.floor(e.timecodeSec)),
       type: 'discussion' as const,
-      ...(e.speaker ? { speaker: e.speaker } : {}),
       text: e.text,
     })),
     ...musicSpans.map((span) => ({
