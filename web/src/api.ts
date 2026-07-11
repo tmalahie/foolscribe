@@ -92,7 +92,12 @@ export function formatSize(bytes: number | null): string | null {
 
 export function formatDate(iso: string | null): string | null {
   if (!iso) return null;
-  const date = new Date(iso);
+  // Une date pure ('YYYY-MM-DD') s'interprète en local, pas en UTC (sinon la
+  // veille s'affiche dans les fuseaux à l'ouest de Greenwich).
+  const dateOnly = iso.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const date = dateOnly
+    ? new Date(Number(dateOnly[1]), Number(dateOnly[2]) - 1, Number(dateOnly[3]))
+    : new Date(iso);
   if (Number.isNaN(date.getTime())) return null;
   return date.toLocaleDateString('fr-FR', {
     day: 'numeric',

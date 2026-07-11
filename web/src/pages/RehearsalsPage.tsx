@@ -5,6 +5,18 @@ import { useAuth } from '../auth';
 import type { Rehearsal } from '../types';
 import { useOnline } from '../useOnline';
 
+function todayIso(): string {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+}
+
+/** Nom proposé selon la convention du groupe : « Répète du 24/9/25 ». */
+function rehearsalNameForDate(iso: string): string {
+  const [year, month, day] = iso.split('-').map(Number);
+  if (!year || !month || !day) return '';
+  return `Répète du ${day}/${month}/${String(year).slice(2)}`;
+}
+
 export function RehearsalsPage() {
   const { ensureAuth } = useAuth();
   const online = useOnline();
@@ -15,6 +27,7 @@ export function RehearsalsPage() {
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
   const [name, setName] = useState('');
   const [date, setDate] = useState('');
+  const [nameTouched, setNameTouched] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(() => {
@@ -34,6 +47,26 @@ export function RehearsalsPage() {
   }, []);
 
   useEffect(load, [load]);
+
+  const openCreateForm = () => {
+    if (creating) {
+      setCreating(false);
+      return;
+    }
+    const today = todayIso();
+    setDate(today);
+    setName(rehearsalNameForDate(today));
+    setNameTouched(false);
+    setCreating(true);
+  };
+
+  const onDateChange = (value: string) => {
+    setDate(value);
+    // Le nom suit la date tant qu'il n'a pas été modifié à la main.
+    if (!nameTouched && value) {
+      setName(rehearsalNameForDate(value));
+    }
+  };
 
   const createRehearsal = async () => {
     if (!name.trim() || busy) return;
@@ -96,7 +129,7 @@ export function RehearsalsPage() {
             {syncing ? 'Synchronisation…' : 'Synchroniser avec Drive'}
           </button>
           <button
-            onClick={() => setCreating((v) => !v)}
+            onClick={openCreateForm}
             disabled={!online}
             className="rounded-lg bg-amber-400 px-3 py-1.5 text-sm font-medium text-zinc-950 hover:bg-amber-300 disabled:cursor-not-allowed disabled:opacity-40"
           >
@@ -112,17 +145,20 @@ export function RehearsalsPage() {
           <div className="flex flex-col gap-3 sm:flex-row">
             <input
               autoFocus
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && void createRehearsal()}
-              placeholder="Nom (ex. Répète Septembre)"
-              className="flex-1 rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm outline-none focus:border-amber-400"
-            />
-            <input
               type="date"
               value={date}
-              onChange={(e) => setDate(e.target.value)}
+              onChange={(e) => onDateChange(e.target.value)}
               className="rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm outline-none focus:border-amber-400"
+            />
+            <input
+              value={name}
+              onChange={(e) => {
+                setName(e.target.value);
+                setNameTouched(true);
+              }}
+              onKeyDown={(e) => e.key === 'Enter' && void createRehearsal()}
+              placeholder="Nom de la répète"
+              className="flex-1 rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm outline-none focus:border-amber-400"
             />
             <button
               onClick={() => void createRehearsal()}

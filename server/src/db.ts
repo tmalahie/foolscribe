@@ -9,6 +9,9 @@ export const pool = mysql.createPool({
   password: config.mysql.password,
   connectionLimit: 10,
   charset: 'utf8mb4',
+  // Les DATE sortent en 'YYYY-MM-DD' (pas en Date UTC minuit local, qui
+  // décale d'un jour à la sérialisation JSON).
+  dateStrings: ['DATE'],
 });
 
 const SCHEMA = [

@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import type { ResultSetHeader } from 'mysql2';
+import type { ResultSetHeader, RowDataPacket } from 'mysql2';
 import { requireAuth } from '../auth';
 import { config } from '../config';
 import { pool } from '../db';
@@ -9,12 +9,26 @@ import type { RehearsalRow } from '../types';
 
 export const syncRouter = Router();
 
-/** Tente d'extraire une date AAAA-MM-JJ ou JJ-MM-AAAA du nom d'un dossier. */
-function dateFromName(name: string): string | null {
+/**
+ * Tente d'extraire une date du nom d'un dossier. Formats couverts :
+ * AAAA-MM-JJ, et les conventions du groupe « répète du 2/02/25 »,
+ * « répète du 24/9/25 », « 24-09-2025 »… (jour/mois sur 1-2 chiffres,
+ * année sur 2 ou 4 chiffres, séparateur / ou -).
+ */
+export function dateFromName(name: string): string | null {
   const iso = name.match(/(\d{4})-(\d{2})-(\d{2})/);
   if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
-  const fr = name.match(/(\d{2})[-/](\d{2})[-/](\d{4})/);
-  if (fr) return `${fr[3]}-${fr[2]}-${fr[1]}`;
+
+  const fr = name.match(/(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})(?!\d)/);
+  if (fr) {
+    const day = parseInt(fr[1], 10);
+    const month = parseInt(fr[2], 10);
+    const yearRaw = fr[3];
+    if (yearRaw.length === 3) return null;
+    const year = yearRaw.length === 2 ? 2000 + parseInt(yearRaw, 10) : parseInt(yearRaw, 10);
+    if (day < 1 || day > 31 || month < 1 || month > 12) return null;
+    return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  }
   return null;
 }
 
@@ -34,15 +48,30 @@ syncRouter.post(
     let newRecordings = 0;
     let scannedFiles = 0;
 
+    // affectedRows d'un upsert est ambigu selon le serveur : on compte le
+    // « nouveau » en comparant à l'état préalable.
+    const [knownRehearsalRows] = await pool.query<RehearsalRow[]>(
+      'SELECT drive_folder_id FROM rehearsals WHERE drive_folder_id IS NOT NULL',
+    );
+    const knownFolders = new Set(knownRehearsalRows.map((r) => r.drive_folder_id));
+    const [knownRecordingRows] = await pool.query<RowDataPacket[]>(
+      'SELECT drive_file_id FROM recordings WHERE drive_file_id IS NOT NULL',
+    );
+    const knownFiles = new Set(
+      knownRecordingRows.map((r) => r.drive_file_id as string),
+    );
+
     const folders = await listChildFolders(config.google.driveRootFolderId);
     for (const folder of folders) {
-      const [result] = await pool.query<ResultSetHeader>(
+      // La date déduite du nom ne remplit que les trous : une date posée à la
+      // main dans l'app n'est jamais écrasée par la synchro.
+      await pool.query<ResultSetHeader>(
         `INSERT INTO rehearsals (name, date, drive_folder_id)
          VALUES (?, ?, ?)
-         ON DUPLICATE KEY UPDATE name = VALUES(name)`,
+         ON DUPLICATE KEY UPDATE name = VALUES(name), date = COALESCE(date, VALUES(date))`,
         [folder.name, dateFromName(folder.name), folder.id],
       );
-      if (result.affectedRows === 1) newRehearsals++;
+      if (!knownFolders.has(folder.id)) newRehearsals++;
 
       const [rows] = await pool.query<RehearsalRow[]>(
         'SELECT id FROM rehearsals WHERE drive_folder_id = ?',
@@ -53,13 +82,13 @@ syncRouter.post(
       const files = (await listFiles(folder.id)).filter(looksLikeAudio);
       scannedFiles += files.length;
       for (const file of files) {
-        const [fileResult] = await pool.query<ResultSetHeader>(
+        await pool.query<ResultSetHeader>(
           `INSERT INTO recordings (rehearsal_id, filename, drive_file_id, size_bytes)
            VALUES (?, ?, ?, ?)
            ON DUPLICATE KEY UPDATE filename = VALUES(filename), size_bytes = VALUES(size_bytes)`,
           [rehearsalId, file.name, file.id, file.sizeBytes],
         );
-        if (fileResult.affectedRows === 1) newRecordings++;
+        if (!knownFiles.has(file.id)) newRecordings++;
       }
     }
 
