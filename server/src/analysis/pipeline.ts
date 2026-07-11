@@ -189,16 +189,36 @@ async function transcribe(recordingId: number): Promise<Word[]> {
   }
 }
 
+// --- Extension des passages sur le chant transcrit -------------------------
+// Quand le chant est intelligible (paroles claires), Scribe le transcrit comme
+// de la parole : le « trou » démarre trop tard ou finit trop tôt (constaté sur
+// de vraies répètes : un passage détecté à 9:49 commençait à 8:50, mangé par
+// les paroles chantées). On absorbe donc dans le passage les runs de mots qui
+// le touchent ET ressemblent à du chant : un seul locuteur, durée bornée, et
+// un événement audio musical ([chante], [joue du piano]…) à proximité. Les
+// événements restent inutilisés PARTOUT ailleurs (un fredonnement en pleine
+// discussion ne crée toujours aucun passage — faux positifs du PoC).
+const SUNG_RUN_SPLIT_GAP_SEC = 5;
+const SUNG_EVENT_PROXIMITY_SEC = 5;
+const SUNG_RUN_MAX_DURATION_SEC = 120;
+const MUSICAL_EVENT_RE = /chant|musique|joue|guitare|piano|batterie|basse|synth|siffl|fredonn/i;
+
 interface MusicSpan {
   start: number;
   end: number;
 }
 
+type Logger = (message: string) => void;
+
+interface WordRun {
+  start: number;
+  end: number;
+  words: (Word & { start: number })[];
+}
+
 // Les passages joués apparaissent comme des trous soutenus dans la parole
-// transcrite (Scribe n'émet aucun mot pendant que le groupe joue). On ne se fie
-// PAS aux tags audio « (chant) » : ils se déclenchent aussi sur un fredonnement
-// en pleine discussion (faux positifs constatés dans le PoC).
-function detectMusicSpans(words: Word[]): MusicSpan[] {
+// transcrite (Scribe n'émet aucun mot pendant que le groupe joue).
+export function detectMusicSpans(words: Word[], log: Logger): MusicSpan[] {
   const spoken = words.filter(
     (w): w is Word & { start: number } => w.type === 'word' && w.start != null,
   );
@@ -211,6 +231,9 @@ function detectMusicSpans(words: Word[]): MusicSpan[] {
       raw.push({ start: prevEnd, end: nextStart });
     }
   }
+  log(
+    `trous de parole ≥ ${MUSIC_MIN_GAP_SEC}s : ${raw.map((s) => `${formatTimecode(s.start)}–${formatTimecode(s.end)}`).join(', ') || 'aucun'}`,
+  );
 
   const merged: MusicSpan[] = [];
   for (const span of raw) {
@@ -220,13 +243,100 @@ function detectMusicSpans(words: Word[]): MusicSpan[] {
         (w) => w.start > prev.end && w.start < span.start,
       ).length;
       if (islandWords <= MUSIC_BRIDGE_MAX_WORDS) {
+        log(
+          `pont : îlot de ${islandWords} mot(s) à ${formatTimecode(prev.end)} → fusion avec le passage suivant`,
+        );
         prev.end = span.end;
         continue;
       }
     }
     merged.push({ ...span });
   }
+
+  extendSpansOverSinging(words, merged, log);
   return merged;
+}
+
+/** Étend les passages sur les runs chantés adjacents (voir bloc ci-dessus). */
+function extendSpansOverSinging(
+  words: Word[],
+  spans: MusicSpan[],
+  log: Logger,
+): void {
+  const spoken = words.filter(
+    (w): w is Word & { start: number } => w.type === 'word' && w.start != null,
+  );
+  const musicalEvents = words.filter(
+    (w): w is Word & { start: number } =>
+      w.type === 'audio_event' && w.start != null && MUSICAL_EVENT_RE.test(w.text),
+  );
+
+  // Runs = séquences de mots séparées par moins de SUNG_RUN_SPLIT_GAP_SEC.
+  const runs: WordRun[] = [];
+  let current: WordRun | null = null;
+  for (const w of spoken) {
+    const end = w.end ?? w.start;
+    if (current && w.start - current.end >= SUNG_RUN_SPLIT_GAP_SEC) {
+      runs.push(current);
+      current = null;
+    }
+    if (!current) current = { start: w.start, end, words: [] };
+    current.end = Math.max(current.end, end);
+    current.words.push(w);
+  }
+  if (current) runs.push(current);
+
+  const isSungRun = (run: WordRun): { ok: boolean; why: string } => {
+    if (run.end - run.start > SUNG_RUN_MAX_DURATION_SEC) {
+      return { ok: false, why: 'trop long pour du chant' };
+    }
+    if (new Set(run.words.map((w) => w.speakerId)).size > 1) {
+      return { ok: false, why: 'plusieurs locuteurs' };
+    }
+    const event = musicalEvents.find(
+      (e) =>
+        e.start <= run.end + SUNG_EVENT_PROXIMITY_SEC &&
+        (e.end ?? e.start) >= run.start - SUNG_EVENT_PROXIMITY_SEC,
+    );
+    if (!event) return { ok: false, why: 'pas d\'événement musical à proximité' };
+    return { ok: true, why: `événement "${event.text}" à ${formatTimecode(event.start)}` };
+  };
+
+  const excerpt = (run: WordRun) =>
+    run.words.slice(0, 5).map((w) => w.text).join(' ');
+
+  for (const span of spans) {
+    // Vers l'arrière : le run qui se termine pile au début du passage.
+    for (;;) {
+      const idx = runs.findIndex((r) => Math.abs(r.end - span.start) < 0.5);
+      if (idx < 0) break;
+      const run = runs[idx];
+      const verdict = isSungRun(run);
+      if (!verdict.ok) break;
+      const previousRun = runs[idx - 1];
+      const newStart = previousRun ? previousRun.end : run.start;
+      log(
+        `extension : chant transcrit ${formatTimecode(run.start)}–${formatTimecode(run.end)} (« ${excerpt(run)}… », ${verdict.why}) → début ${formatTimecode(span.start)} ⇒ ${formatTimecode(newStart)}`,
+      );
+      span.start = newStart;
+      runs.splice(idx, 1);
+    }
+    // Vers l'avant : le run qui commence pile à la fin du passage.
+    for (;;) {
+      const idx = runs.findIndex((r) => Math.abs(r.start - span.end) < 0.5);
+      if (idx < 0) break;
+      const run = runs[idx];
+      const verdict = isSungRun(run);
+      if (!verdict.ok) break;
+      const nextRun = runs[idx + 1];
+      const newEnd = nextRun ? nextRun.start : run.end;
+      log(
+        `extension : chant transcrit ${formatTimecode(run.start)}–${formatTimecode(run.end)} (« ${excerpt(run)}… », ${verdict.why}) → fin ${formatTimecode(span.end)} ⇒ ${formatTimecode(newEnd)}`,
+      );
+      span.end = newEnd;
+      runs.splice(idx, 1);
+    }
+  }
 }
 
 function isInMusicSpan(seconds: number, spans: MusicSpan[]): boolean {
@@ -399,14 +509,24 @@ Soumets la timeline finale via l'outil.`;
 /** Exécute la pipeline complète pour un enregistrement et renvoie la timeline. */
 export async function runPipeline(recordingId: number): Promise<Timeline> {
   fs.mkdirSync(TMP_DIR, { recursive: true });
+  const log: Logger = (message) =>
+    console.log(`[analyse #${recordingId}] ${message}`);
 
   const words = await transcribe(recordingId);
-  const musicSpans = detectMusicSpans(words);
-  console.log(
-    `[analyse #${recordingId}] ${musicSpans.length} passage(s) joué(s) détecté(s) (trou ≥ ${MUSIC_MIN_GAP_SEC}s)`,
+  const musicSpans = detectMusicSpans(words, log);
+  log(
+    `passages joués retenus : ${
+      musicSpans
+        .map(
+          (s) =>
+            `${formatTimecode(s.start)}–${formatTimecode(s.end)} (${Math.round(s.end - s.start)}s)`,
+        )
+        .join(', ') || 'aucun'
+    }`,
   );
 
   const transcript = buildTranscript(words, musicSpans);
+  log(`transcription compactée : ${transcript.split('\n').length} lignes`);
 
   // Trace de debug utile pour re-tuner les seuils (non servie, non critique).
   try {
@@ -418,10 +538,9 @@ export async function runPipeline(recordingId: number): Promise<Timeline> {
     // best-effort
   }
 
-  console.log(
-    `[analyse #${recordingId}] Étage 2 — ${REASONING_MODEL} (raisonnement sur la transcription)…`,
-  );
+  log(`Étage 2 — ${REASONING_MODEL} (raisonnement sur la transcription)…`);
   const discussionEntries = await generateDiscussionEntries(transcript);
+  log(`Étage 2 terminé : ${discussionEntries.length} entrée(s) de discussion`);
 
   const entries: TimelineEntry[] = [
     ...discussionEntries.map((e) => ({
