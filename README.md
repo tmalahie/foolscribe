@@ -51,12 +51,16 @@ Pour le bouton Google Sign-In du front, ajouter aussi l'origine de l'app
 ## Déploiement (OVH)
 
 1. Cloner le repo sur le serveur, `cp .env.example .env` et tout renseigner.
-2. nginx : adapter [deploy/nginx.conf.example](deploy/nginx.conf.example)
-   (domaine, chemin du build), puis `certbot --nginx` pour le HTTPS
-   (obligatoire : PWA + OAuth).
+2. Reverse proxy vers le port 3001 (`PORT` du .env) : adapter
+   [deploy/apache-vhost.conf.example](deploy/apache-vhost.conf.example) ou
+   [deploy/nginx.conf.example](deploy/nginx.conf.example), puis
+   `certbot --apache` / `certbot --nginx` pour un vrai certificat HTTPS
+   (obligatoire : PWA + OAuth refusent un certificat invalide).
 3. `npm ci && npm run build`
 4. `pm2 start deploy/ecosystem.config.cjs && pm2 save`
-5. Mises à jour suivantes : `./deploy/deploy.sh`
+5. Ajouter `https://<domaine>` aux origines JavaScript autorisées du client
+   OAuth Google (console Google Cloud).
+6. Mises à jour suivantes : `./deploy/deploy.sh`
 
 ## Points d'attention (voir PLAN.md pour le détail)
 

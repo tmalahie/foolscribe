@@ -1,0 +1,41 @@
+# foolscribe — vhost Apache (reverse proxy vers Node sur le port 3001).
+#
+# Le routage se fait ici, pas dans pm2 : ServerName sélectionne ce vhost pour
+# le domaine, ProxyPass envoie vers le port de l'app (chaque app Node a le
+# sien ; foolscribe écoute sur 3001 — variable PORT du .env).
+#
+# Node sert aussi le build front (web/dist) : on proxifie donc tout, pas
+# seulement /api. Pas besoin de DocumentRoot.
+#
+# Prérequis :
+#   sudo a2enmod proxy proxy_http ssl
+#   sudo certbot --apache -d foolscribe.example.com   # vrai certificat requis
+#     (PWA + Google Sign-In refusent un certificat invalide/d'un autre domaine)
+
+<IfModule mod_ssl.c>
+<VirtualHost *:443>
+    ServerName foolscribe.example.com
+    ErrorLog ${APACHE_LOG_DIR}/foolscribe-error.log
+    CustomLog ${APACHE_LOG_DIR}/foolscribe-access.log combined
+
+    ProxyPreserveHost On
+    ProxyPass / http://localhost:3001/
+    ProxyPassReverse / http://localhost:3001/
+    # Uploads/mirrors longs (gros fichiers audio)
+    ProxyTimeout 600
+    # Pas de plafond Apache sur la taille des uploads (0 = illimité ;
+    # certaines versions plafonnent à 1 Go par défaut)
+    LimitRequestBody 0
+
+    Include /etc/letsencrypt/options-ssl-apache.conf
+    SSLCertificateFile /etc/letsencrypt/live/foolscribe.example.com/fullchain.pem
+    SSLCertificateKeyFile /etc/letsencrypt/live/foolscribe.example.com/privkey.pem
+</VirtualHost>
+</IfModule>
+
+# Redirection HTTP → HTTPS (certbot --apache la crée généralement tout seul)
+<VirtualHost *:80>
+    ServerName foolscribe.example.com
+    RewriteEngine On
+    RewriteRule ^ https://%{SERVER_NAME}%{REQUEST_URI} [END,NE,R=permanent]
+</VirtualHost>
