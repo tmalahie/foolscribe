@@ -6,10 +6,10 @@ import type { ResultSetHeader } from 'mysql2';
 import { promisify } from 'util';
 import { requireAuth } from '../auth';
 import { pool } from '../db';
-import { createFolder, uploadFile } from '../drive';
+import { createFolder, renameFile, trashFile, uploadFile } from '../drive';
 import { HttpError, wrap } from '../errors';
 import { objectKeyFor, TMP_DIR } from '../recordingService';
-import { audioMimeType, uploadStream } from '../storage';
+import { audioMimeType, deleteObject, uploadStream } from '../storage';
 import type { RecordingRow, RehearsalRow } from '../types';
 
 const execFileAsync = promisify(execFile);
@@ -57,6 +57,79 @@ rehearsalsRouter.post(
       [result.insertId],
     );
     res.status(201).json({ rehearsal: rows[0] });
+  }),
+);
+
+rehearsalsRouter.patch(
+  '/:id',
+  requireAuth,
+  wrap(async (req, res) => {
+    const id = parseInt(String(req.params.id), 10);
+    const { name, date } = req.body as { name?: string; date?: string | null };
+
+    const [rehearsals] = await pool.query<RehearsalRow[]>(
+      'SELECT * FROM rehearsals WHERE id = ?',
+      [id],
+    );
+    const rehearsal = rehearsals[0];
+    if (!rehearsal) throw new HttpError(404, 'Répétition introuvable');
+
+    const trimmed = name?.trim();
+    if (name !== undefined && !trimmed) {
+      throw new HttpError(400, 'Nom de répétition requis');
+    }
+    if (date != null && date !== '' && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      throw new HttpError(400, 'Date invalide (format attendu : AAAA-MM-JJ)');
+    }
+
+    // Drive reste la source de vérité : le renommage se propage au dossier.
+    if (trimmed && trimmed !== rehearsal.name && rehearsal.drive_folder_id) {
+      await renameFile(rehearsal.drive_folder_id, trimmed);
+    }
+
+    await pool.query('UPDATE rehearsals SET name = ?, date = ? WHERE id = ?', [
+      trimmed ?? rehearsal.name,
+      date === undefined ? rehearsal.date : date || null,
+      id,
+    ]);
+    const [rows] = await pool.query<RehearsalRow[]>(
+      'SELECT * FROM rehearsals WHERE id = ?',
+      [id],
+    );
+    res.json({ rehearsal: rows[0] });
+  }),
+);
+
+rehearsalsRouter.delete(
+  '/:id',
+  requireAuth,
+  wrap(async (req, res) => {
+    const id = parseInt(String(req.params.id), 10);
+    const [rehearsals] = await pool.query<RehearsalRow[]>(
+      'SELECT * FROM rehearsals WHERE id = ?',
+      [id],
+    );
+    const rehearsal = rehearsals[0];
+    if (!rehearsal) throw new HttpError(404, 'Répétition introuvable');
+
+    // Corbeille Drive d'abord (le dossier emporte ses fichiers) — si ça
+    // échoue, on ne supprime rien en base.
+    if (rehearsal.drive_folder_id) {
+      await trashFile(rehearsal.drive_folder_id);
+    }
+
+    const [recordings] = await pool.query<RecordingRow[]>(
+      'SELECT * FROM recordings WHERE rehearsal_id = ?',
+      [id],
+    );
+    for (const rec of recordings) {
+      if (rec.object_key) {
+        await deleteObject(rec.object_key).catch(() => {}); // best effort
+      }
+    }
+
+    await pool.query('DELETE FROM rehearsals WHERE id = ?', [id]);
+    res.json({ ok: true });
   }),
 );
 

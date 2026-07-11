@@ -66,7 +66,7 @@ export function RehearsalsPage() {
         newRecordings: number;
       }>('/api/sync');
       setSyncMessage(
-        `Synchro terminée : ${result.newRehearsals} nouvelle(s) répète(s), ${result.newRecordings} nouvel(aux) enregistrement(s).`,
+        `Synchronisation terminée : ${result.newRehearsals} nouvelle(s) répète(s), ${result.newRecordings} nouveau(x) enregistrement(s).`,
       );
       load();
     } catch (err) {
@@ -87,9 +87,13 @@ export function RehearsalsPage() {
             onClick={() => void sync()}
             disabled={!online || syncing}
             className="rounded-lg border border-zinc-700 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-40"
-            title={online ? 'Détecte les fichiers ajoutés directement dans Drive' : 'Indisponible hors-ligne'}
+            title={
+              online
+                ? 'Récupère les répètes et fichiers ajoutés dans le Drive du groupe'
+                : 'Indisponible hors-ligne'
+            }
           >
-            {syncing ? 'Synchro…' : 'Resync Drive'}
+            {syncing ? 'Synchronisation…' : 'Synchroniser avec Drive'}
           </button>
           <button
             onClick={() => setCreating((v) => !v)}
@@ -142,7 +146,7 @@ export function RehearsalsPage() {
 
       {rehearsals?.length === 0 && (
         <p className="mt-6 text-sm text-zinc-500">
-          Aucune répétition pour l'instant. Crée-en une ou lance une resync
+          Aucune répétition pour l'instant. Crée-en une ou synchronise avec
           Drive.
         </p>
       )}
@@ -156,9 +160,11 @@ export function RehearsalsPage() {
             >
               <div>
                 <div className="font-medium">{rehearsal.name}</div>
-                <div className="mt-0.5 text-xs text-zinc-500">
-                  {formatDate(rehearsal.date) ?? 'date inconnue'}
-                </div>
+                {rehearsal.date && (
+                  <div className="mt-0.5 text-xs text-zinc-500">
+                    {formatDate(rehearsal.date)}
+                  </div>
+                )}
               </div>
               <div className="text-sm text-zinc-400">
                 {rehearsal.recordings_count ?? 0} enreg.

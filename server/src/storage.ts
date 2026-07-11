@@ -1,4 +1,5 @@
 import {
+  DeleteObjectCommand,
   GetObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
@@ -54,6 +55,12 @@ export async function uploadStream(
     },
   });
   await upload.done();
+}
+
+export async function deleteObject(key: string): Promise<void> {
+  await s3.send(
+    new DeleteObjectCommand({ Bucket: config.s3.bucket, Key: key }),
+  );
 }
 
 export async function presignGetUrl(key: string): Promise<string> {

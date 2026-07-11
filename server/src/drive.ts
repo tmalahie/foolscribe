@@ -139,6 +139,24 @@ export async function uploadFile(
   };
 }
 
+export async function renameFile(fileId: string, name: string): Promise<void> {
+  const drive = getDrive();
+  await drive.files.update({ fileId, requestBody: { name } });
+}
+
+/** Met le fichier/dossier à la corbeille Drive (récupérable). 404 toléré. */
+export async function trashFile(fileId: string): Promise<void> {
+  const drive = getDrive();
+  try {
+    await drive.files.update({ fileId, requestBody: { trashed: true } });
+  } catch (err) {
+    const status = (err as { status?: number; code?: number }).status ??
+      (err as { code?: number }).code;
+    if (status === 404) return; // déjà supprimé côté Drive
+    throw err;
+  }
+}
+
 export async function downloadFile(fileId: string): Promise<Readable> {
   const drive = getDrive();
   const { data } = await drive.files.get(

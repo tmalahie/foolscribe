@@ -52,6 +52,7 @@ export interface TimelineEntry {
 
 export interface Timeline {
   generatedAt: string;
+  editedAt?: string;
   model: { stt: string; reasoning: string };
   entries: TimelineEntry[];
 }

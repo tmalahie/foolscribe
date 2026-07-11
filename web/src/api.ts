@@ -39,7 +39,40 @@ export const api = {
       handle<T>(res),
     );
   },
+
+  patch<T>(path: string, body: unknown): Promise<T> {
+    return fetch(path, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then((res) => handle<T>(res));
+  },
+
+  put<T>(path: string, body: unknown): Promise<T> {
+    return fetch(path, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then((res) => handle<T>(res));
+  },
+
+  delete<T>(path: string): Promise<T> {
+    return fetch(path, { method: 'DELETE' }).then((res) => handle<T>(res));
+  },
 };
+
+/** Parse "m:ss", "h:mm:ss" ou un nombre de secondes ; null si invalide. */
+export function parseTimecode(input: string): number | null {
+  const trimmed = input.trim();
+  if (!trimmed) return null;
+  if (/^\d+$/.test(trimmed)) return parseInt(trimmed, 10);
+  const match = trimmed.match(/^(?:(\d+):)?(\d{1,2}):(\d{2})$/);
+  if (!match) return null;
+  const [, h, m, s] = match;
+  const seconds =
+    (h ? parseInt(h, 10) * 3600 : 0) + parseInt(m, 10) * 60 + parseInt(s, 10);
+  return Number.isFinite(seconds) ? seconds : null;
+}
 
 export function formatTimecode(seconds: number): string {
   const total = Math.floor(seconds);
