@@ -486,6 +486,7 @@ export function RecordingPage() {
                         key={i}
                         entry={entry}
                         active={i === activeIndex}
+                        isLast={i === entries.length - 1}
                         sectionEnd={
                           entries[i + 1]?.timecodeSec ??
                           (entry.type === 'music' ? entry.endSec : undefined) ??
@@ -584,6 +585,7 @@ export function RecordingPage() {
 function TimelineRow({
   entry,
   active,
+  isLast,
   sectionEnd,
   progressTime,
   onSeek,
@@ -592,6 +594,7 @@ function TimelineRow({
 }: {
   entry: TimelineEntry;
   active: boolean;
+  isLast: boolean;
   sectionEnd?: number;
   progressTime: number;
   onSeek: (seconds: number) => void;
@@ -632,6 +635,13 @@ function TimelineRow({
               {entry.text && (
                 <span className="ml-2 font-normal text-violet-300">
                   {entry.text}
+                </span>
+              )}
+              {/* En dernière ligne, rien ne borne la section : la fin détectée
+                  redevient une info utile. */}
+              {isLast && entry.endSec != null && (
+                <span className="ml-2 font-normal text-zinc-500">
+                  jusqu'à {formatTimecode(entry.endSec)}
                 </span>
               )}
             </span>
