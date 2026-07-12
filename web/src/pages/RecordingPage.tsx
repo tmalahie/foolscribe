@@ -611,14 +611,14 @@ function TimelineRow({
     active && sectionEnd != null && sectionEnd > entry.timecodeSec + 1;
 
   return (
-    <li ref={ref}>
+    <li ref={ref} className={`cursor-pointer rounded-lg ${active
+      ? 'bg-amber-400/10 ring-1 ring-amber-400/40'
+      : 'hover:bg-zinc-900'
+      }`}>
       <div className="flex items-start gap-1">
         <button
           onClick={() => onSeek(entry.timecodeSec)}
-          className={`flex w-full min-w-0 items-baseline gap-3 rounded-lg px-3 py-2 text-left transition-colors ${active
-            ? 'bg-amber-400/10 ring-1 ring-amber-400/40'
-            : 'hover:bg-zinc-900'
-            } ${showSlider ? 'rounded-b-none' : ''}`}
+          className={`cursor-pointer flex w-full min-w-0 items-baseline gap-3 px-3 py-2 text-left transition-colors ${showSlider ? 'rounded-b-none' : ''}`}
         >
           <span
             className={`shrink-0 font-mono text-xs tabular-nums ${active ? 'text-amber-400' : 'text-zinc-500'
@@ -647,7 +647,7 @@ function TimelineRow({
         {onEdit && (
           <button
             onClick={onEdit}
-            className="mt-1.5 shrink-0 rounded-md border border-zinc-700 px-1.5 py-0.5 text-xs text-zinc-400 hover:bg-zinc-800"
+            className="mt-1.5 mr-1.5 shrink-0 rounded-md border border-zinc-700 px-1.5 py-0.5 text-xs text-zinc-400 hover:bg-zinc-800"
             title="Corriger cette ligne"
           >
             ✎
@@ -656,7 +656,7 @@ function TimelineRow({
       </div>
       {showSlider && (
         <div
-          className={`flex items-center gap-2 rounded-b-lg bg-amber-400/10 px-3 pb-2 ${onEdit ? 'mr-7' : ''
+          className={`flex items-center gap-2 px-3 pb-2 ${onEdit ? 'mr-7' : ''
             }`}
         >
           <input
