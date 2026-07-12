@@ -336,17 +336,17 @@ export function RecordingPage() {
                     : 'Lancer l’analyse'}
               </button>
               {pinned ? (
-                <>
-                  <span className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-sm text-emerald-400">
+                <span className="inline-flex overflow-hidden rounded-lg border border-emerald-500/40">
+                  <span className="bg-emerald-500/10 px-3 py-1.5 text-sm text-emerald-400">
                     ✓ Disponible sur cet appareil
                   </span>
                   <button
                     onClick={() => setConfirmingUnpin(true)}
-                    className="rounded-lg border border-zinc-700 px-3 py-1.5 text-sm text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
+                    className="border-l border-emerald-500/40 px-3 py-1.5 text-sm text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
                   >
-                    Retirer
+                    Effacer
                   </button>
-                </>
+                </span>
               ) : (
                 <button
                   onClick={() => void downloadPin()}
@@ -515,10 +515,10 @@ export function RecordingPage() {
 
       {confirmingUnpin && (
         <ConfirmDialog
-          title="Retirer de cet appareil ?"
-          message="L’audio et la timeline téléchargés seront supprimés du stockage de cet appareil. L’enregistrement reste bien sûr disponible en ligne."
-          confirmLabel="Retirer"
-          busyLabel="Retrait…"
+          title="Effacer de cet appareil ?"
+          message="L’audio et la timeline téléchargés seront effacés du stockage de cet appareil. L’enregistrement reste bien sûr disponible en ligne."
+          confirmLabel="Effacer"
+          busyLabel="Effacement…"
           onConfirm={async () => {
             await unpinRecording(id);
             setPinned(false);
