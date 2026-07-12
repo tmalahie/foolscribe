@@ -18,6 +18,69 @@ import type {
 } from '../types';
 import { useOnline } from '../useOnline';
 
+const PLAYBACK_RATES = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
+
+function PlayIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-6 w-6 translate-x-px" fill="currentColor">
+      <path d="M8 5v14l11-7z" />
+    </svg>
+  );
+}
+
+function PauseIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-6 w-6" fill="currentColor">
+      <path d="M6 5h4v14H6zM14 5h4v14h-4z" />
+    </svg>
+  );
+}
+
+function SkipTenIcon({ direction }: { direction: 'back' | 'forward' }) {
+  const isForward = direction === 'forward';
+  // Boucle ouverte en haut (gap de ~70°) + pointe de flèche, dessinée pour la
+  // rotation « avancer » (sens horaire) ; on la miroite pour « reculer ».
+  return (
+    <svg viewBox="0 0 36 36" className="h-12 w-12" fill="none">
+      <g transform={isForward ? 'scale(-1,1) translate(-36,0)' : undefined}>
+        <path
+          d="M18 6.5 A11.5 11.5 0 1 1 8.0 13.0"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          fill="none"
+        />
+        {/* Pointe de flèche au sommet, dans le sens de la rotation horaire. */}
+        <path
+          d="M18 2.5 L18 10.5 L12 6.5 Z"
+          fill="currentColor"
+        />
+      </g>
+      <text
+        x="18"
+        y="19"
+        textAnchor="middle"
+        dominantBaseline="middle"
+        fontSize="7.5"
+        fontWeight="600"
+        fill="currentColor"
+      >
+        {isForward ? '+10' : '−10'}
+      </text>
+    </svg>
+  );
+}
+
+function DotsIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-5 w-5" fill="currentColor">
+      <circle cx="12" cy="5" r="1.6" />
+      <circle cx="12" cy="12" r="1.6" />
+      <circle cx="12" cy="19" r="1.6" />
+    </svg>
+  );
+}
+
 export function RecordingPage() {
   const { id: idParam } = useParams();
   const id = Number(idParam);
@@ -43,7 +106,13 @@ export function RecordingPage() {
   const [editMode, setEditMode] = useState(false);
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [draftEntry, setDraftEntry] = useState<TimelineEntry | null>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [playbackRate, setPlaybackRate] = useState(1);
+  const [playerMenuOpen, setPlayerMenuOpen] = useState(false);
+  const [rateSubmenuOpen, setRateSubmenuOpen] = useState(false);
+  const [downloadingAudio, setDownloadingAudio] = useState(false);
   const audioRef = useRef<HTMLAudioElement>(null);
+  const playerMenuRef = useRef<HTMLDivElement>(null);
 
   const load = useCallback(async () => {
     try {
@@ -161,6 +230,68 @@ export function RecordingPage() {
     audio.currentTime = Math.max(0, audio.currentTime + delta);
   };
 
+  const togglePlay = () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (audio.paused) void audio.play().catch(() => { });
+    else audio.pause();
+  };
+
+  const closePlayerMenu = () => {
+    setPlayerMenuOpen(false);
+    setRateSubmenuOpen(false);
+  };
+
+  const changePlaybackRate = (rate: number) => {
+    const audio = audioRef.current;
+    if (audio) audio.playbackRate = rate;
+    setPlaybackRate(rate);
+    closePlayerMenu();
+  };
+
+  // Force un vrai téléchargement du fichier audio (au lieu de l'ouvrir dans
+  // un onglet), via un blob local et un lien <a download> synthétique.
+  const downloadAudio = async () => {
+    if (downloadingAudio) return;
+    closePlayerMenu();
+    setDownloadingAudio(true);
+    try {
+      // En ligne : on passe par le flux même-origine (?stream=1) pour éviter le
+      // CORS de l'Object Storage (l'URL présignée S3 n'expose pas les en-têtes
+      // CORS). Hors-ligne : on a déjà un blob local (pinnedAudioUrl).
+      const src = pinnedAudioUrl ?? `/api/recordings/${id}/audio?stream=1`;
+      const res = await fetch(src);
+      if (!res.ok) throw new Error(`Erreur ${res.status}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = recording?.filename ?? `enregistrement-${id}`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setActionError(
+        err instanceof Error ? err.message : 'Téléchargement impossible',
+      );
+    } finally {
+      setDownloadingAudio(false);
+    }
+  };
+
+  // Ferme le menu du lecteur au clic en dehors.
+  useEffect(() => {
+    if (!playerMenuOpen) return;
+    const onClick = (e: MouseEvent) => {
+      if (!playerMenuRef.current?.contains(e.target as Node)) {
+        closePlayerMenu();
+      }
+    };
+    document.addEventListener('mousedown', onClick);
+    return () => document.removeEventListener('mousedown', onClick);
+  }, [playerMenuOpen]);
+
   // Seek sans déclencher la lecture (utilisé par le slider de section).
   const scrubTo = (seconds: number) => {
     const audio = audioRef.current;
@@ -226,7 +357,7 @@ export function RecordingPage() {
     analysis?.status === 'pending' || analysis?.status === 'running';
 
   return (
-    <div>
+    <div className={recording ? 'pb-40' : undefined}>
       <Link
         to={recording ? `/rehearsals/${recording.rehearsal_id}` : '/'}
         className="text-sm text-zinc-500 hover:text-zinc-300"
@@ -275,17 +406,107 @@ export function RecordingPage() {
                 <button
                   onClick={() => void startRenaming()}
                   disabled={!online}
-                  className="text-zinc-500 underline-offset-2 hover:text-zinc-300 hover:underline disabled:opacity-40"
+                  className="cursor-pointer text-zinc-500 underline-offset-2 hover:text-zinc-300 hover:underline disabled:opacity-40"
                 >
                   Renommer
                 </button>
                 <button
                   onClick={() => void askDelete()}
                   disabled={!online}
-                  className="text-zinc-500 underline-offset-2 hover:text-red-400 hover:underline disabled:opacity-40"
+                  className="cursor-pointer text-zinc-500 underline-offset-2 hover:text-red-400 hover:underline disabled:opacity-40"
                 >
                   Supprimer
                 </button>
+              </div>
+              <div className="mt-3">
+                {analysis?.status === 'error' && (
+                  <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-300">
+                    L'analyse a échoué : {analysis.error ?? 'erreur inconnue'}
+                  </div>
+                )}
+
+                {analysisInProgress && (
+                  <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-4 text-sm text-zinc-400">
+                    <span className="mr-2 inline-block h-3 w-3 animate-pulse rounded-full bg-amber-400 align-middle" />
+                    Analyse en cours — compte quelques minutes pour une répète d'une
+                    heure. La page se met à jour toute seule.
+                  </div>
+                )}
+
+                {!analysis && (
+                  <p className="text-sm text-zinc-500">
+                    Pas encore d'analyse pour cet enregistrement.
+                  </p>
+                )}
+                {timeline && <p className="mt-4 text-xs text-zinc-600">
+                  Timeline générée automatiquement le{' '}
+                  {new Date(timeline.generatedAt).toLocaleString('fr-FR')}
+                  {timeline.editedAt && (
+                    <>
+                      {' '}
+                      · corrigée le{' '}
+                      {new Date(timeline.editedAt).toLocaleString('fr-FR')}
+                    </>
+                  )}
+                </p>}
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <button
+                    onClick={() => {
+                      setActionError(null);
+                      setConfirmingAnalyze(true);
+                    }}
+                    disabled={!online || analysisInProgress}
+                    className={`rounded-lg bg-amber-400 px-3 py-1.5 text-sm font-medium text-zinc-950 hover:bg-amber-300 disabled:cursor-not-allowed disabled:opacity-40${analysisInProgress && analysis?.status !== 'done' ? '' : ' cursor-pointer'}`}
+                    title={online ? undefined : 'Indisponible hors-ligne'}
+                  >
+                    {analysisInProgress
+                      ? 'Analyse en cours…'
+                      : analysis?.status === 'done'
+                        ? 'Relancer l’analyse'
+                        : 'Lancer l’analyse'}
+                  </button>
+                  {pinned ? (
+                    <span className="inline-flex overflow-hidden rounded-lg border border-emerald-500/40">
+                      <span className="bg-emerald-500/10 px-3 py-1.5 text-sm text-emerald-400">
+                        ✓ Téléchargé
+                      </span>
+                      <button
+                        onClick={() => setConfirmingUnpin(true)}
+                        title="Effacer de cet appareil"
+                        aria-label="Effacer de cet appareil"
+                        className="flex items-center border-l border-emerald-500/40 px-2.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 cursor-pointer"
+                      >
+                        <svg
+                          viewBox="0 0 24 24"
+                          className="h-4 w-4"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="1.8"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
+                          <path d="M3 6h18" />
+                          <path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2" />
+                          <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+                          <path d="M10 11v6" />
+                          <path d="M14 11v6" />
+                        </svg>
+                      </button>
+                    </span>
+                  ) : (
+                    <button
+                      onClick={() => void downloadPin()}
+                      disabled={pinBusy || !online}
+                      className="rounded-lg border border-zinc-700 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-40"
+                      title="Pour écouter et relire la timeline même sans réseau (au studio)"
+                    >
+                      {pinBusy ? 'Téléchargement…' : 'Télécharger sur cet appareil'}
+                    </button>
+                  )}
+                </div>
+                {actionError && (
+                  <p className="mt-2 text-sm text-red-400">{actionError}</p>
+                )}
               </div>
             </>
           )}
@@ -295,124 +516,132 @@ export function RecordingPage() {
             </p>
           )}
 
-          <div className="sticky top-[53px] z-30 -mx-4 mt-4 border-b border-zinc-800 bg-zinc-950/95 px-4 py-3 backdrop-blur">
-            {audioSrc ? (
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => skip(-10)}
-                  className="shrink-0 rounded-full border border-zinc-700 px-2.5 py-2 text-xs font-medium text-zinc-300 hover:bg-zinc-800"
-                  title="Reculer de 10 secondes"
-                >
-                  −10
-                </button>
-                <audio
-                  ref={audioRef}
-                  controls
-                  preload="metadata"
-                  src={audioSrc}
-                  className="min-w-0 flex-1"
-                  onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
-                  onLoadedMetadata={(e) => {
-                    const d = e.currentTarget.duration;
-                    setDuration(Number.isFinite(d) ? d : null);
-                  }}
-                />
-                <button
-                  onClick={() => skip(10)}
-                  className="shrink-0 rounded-full border border-zinc-700 px-2.5 py-2 text-xs font-medium text-zinc-300 hover:bg-zinc-800"
-                  title="Avancer de 10 secondes"
-                >
-                  +10
-                </button>
-              </div>
-            ) : (
-              <p className="text-sm text-zinc-500">
-                Audio indisponible hors-ligne — appuie sur « Télécharger sur cet
-                appareil » quand tu as du réseau.
-              </p>
-            )}
-
-            <div className="mt-3 flex flex-wrap items-center gap-2">
-              <button
-                onClick={() => {
-                  setActionError(null);
-                  setConfirmingAnalyze(true);
-                }}
-                disabled={!online || analysisInProgress}
-                className="rounded-lg bg-amber-400 px-3 py-1.5 text-sm font-medium text-zinc-950 hover:bg-amber-300 disabled:cursor-not-allowed disabled:opacity-40"
-                title={online ? undefined : 'Indisponible hors-ligne'}
-              >
-                {analysisInProgress
-                  ? 'Analyse en cours…'
-                  : analysis?.status === 'done'
-                    ? 'Relancer l’analyse'
-                    : 'Lancer l’analyse'}
-              </button>
-              {pinned ? (
-                <span className="inline-flex overflow-hidden rounded-lg border border-emerald-500/40">
-                  <span className="bg-emerald-500/10 px-3 py-1.5 text-sm text-emerald-400">
-                    ✓ Téléchargé
-                  </span>
-                  <button
-                    onClick={() => setConfirmingUnpin(true)}
-                    title="Effacer de cet appareil"
-                    aria-label="Effacer de cet appareil"
-                    className="flex items-center border-l border-emerald-500/40 px-2.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 cursor-pointer"
-                  >
-                    <svg
-                      viewBox="0 0 24 24"
-                      className="h-4 w-4"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="1.8"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
+          <div className="fixed inset-x-0 bottom-0 z-30 border-t border-zinc-800 bg-zinc-950/95 backdrop-blur">
+            <div className="mx-auto max-w-3xl px-4 py-2 pb-[calc(0.75rem+env(safe-area-inset-bottom))]">
+              {audioSrc ? (
+                <div>
+                  <audio
+                    ref={audioRef}
+                    preload="metadata"
+                    src={audioSrc}
+                    className="hidden"
+                    onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
+                    onLoadedMetadata={(e) => {
+                      const d = e.currentTarget.duration;
+                      setDuration(Number.isFinite(d) ? d : null);
+                      e.currentTarget.playbackRate = playbackRate;
+                    }}
+                    onPlay={() => setIsPlaying(true)}
+                    onPause={() => setIsPlaying(false)}
+                    onEnded={() => setIsPlaying(false)}
+                  />
+                  <div className="relative mb-1 flex items-center justify-center gap-6">
+                    <button
+                      onClick={() => skip(-10)}
+                      className="shrink-0 rounded-full p-2 text-zinc-300 hover:bg-zinc-800"
+                      title="Reculer de 10 secondes"
                     >
-                      <path d="M3 6h18" />
-                      <path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2" />
-                      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
-                      <path d="M10 11v6" />
-                      <path d="M14 11v6" />
-                    </svg>
-                  </button>
-                </span>
+                      <SkipTenIcon direction="back" />
+                    </button>
+                    <button
+                      onClick={togglePlay}
+                      className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-white text-zinc-950 hover:bg-zinc-200"
+                      title={isPlaying ? 'Mettre en pause' : 'Lire'}
+                    >
+                      {isPlaying ? <PauseIcon /> : <PlayIcon />}
+                    </button>
+                    <button
+                      onClick={() => skip(10)}
+                      className="shrink-0 rounded-full p-2 text-zinc-300 hover:bg-zinc-800"
+                      title="Avancer de 10 secondes"
+                    >
+                      <SkipTenIcon direction="forward" />
+                    </button>
+                    <div ref={playerMenuRef} className="absolute right-0 top-1/2 -translate-y-1/2">
+                      <button
+                        onClick={() =>
+                          playerMenuOpen ? closePlayerMenu() : setPlayerMenuOpen(true)
+                        }
+                        className="rounded-full p-2 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
+                        title="Plus d'options"
+                        aria-label="Plus d'options"
+                      >
+                        <DotsIcon />
+                      </button>
+                      {playerMenuOpen && (
+                        <div className="absolute bottom-full right-0 mb-2 w-52 rounded-lg border border-zinc-700 bg-zinc-900 py-1 text-sm shadow-lg">
+                          {rateSubmenuOpen ? (
+                            <>
+                              <button
+                                onClick={() => setRateSubmenuOpen(false)}
+                                className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-zinc-400 hover:bg-zinc-800"
+                              >
+                                <span>←</span>
+                                <span>Vitesse de lecture</span>
+                              </button>
+                              <div className="my-1 border-t border-zinc-800" />
+                              {PLAYBACK_RATES.map((rate) => (
+                                <button
+                                  key={rate}
+                                  onClick={() => changePlaybackRate(rate)}
+                                  className={`flex w-full items-center justify-between px-3 py-1.5 text-left hover:bg-zinc-800 ${rate === playbackRate ? 'text-amber-400' : 'text-zinc-200'
+                                    }`}
+                                >
+                                  <span>{`${rate}x`}</span>
+                                  {rate === playbackRate && <span>✓</span>}
+                                </button>
+                              ))}
+                            </>
+                          ) : (
+                            <>
+                              <button
+                                onClick={() => void downloadAudio()}
+                                disabled={downloadingAudio}
+                                className="block w-full px-3 py-2 text-left text-zinc-200 hover:bg-zinc-800 disabled:opacity-50"
+                              >
+                                {downloadingAudio ? 'Téléchargement…' : 'Télécharger'}
+                              </button>
+                              <button
+                                onClick={() => setRateSubmenuOpen(true)}
+                                className="flex w-full items-center justify-between px-3 py-2 text-left text-zinc-200 hover:bg-zinc-800"
+                              >
+                                <span>Vitesse de lecture</span>
+                                <span className="text-zinc-500">
+                                  {`${playbackRate}x`} ›
+                                </span>
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={duration ?? 0}
+                    step={0.1}
+                    value={Math.min(currentTime, duration ?? currentTime)}
+                    onChange={(e) => scrubTo(Number(e.target.value))}
+                    disabled={!duration}
+                    className="h-1 w-full cursor-pointer accent-amber-400 disabled:cursor-default"
+                    aria-label="Position dans la lecture"
+                  />
+                  <div className="mt-1 flex items-center justify-between text-xs tabular-nums text-zinc-500">
+                    <span>{formatTimecode(currentTime)}</span>
+                    <span>{duration != null ? formatTimecode(duration) : '--:--'}</span>
+                  </div>
+                </div>
               ) : (
-                <button
-                  onClick={() => void downloadPin()}
-                  disabled={pinBusy || !online}
-                  className="rounded-lg border border-zinc-700 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-40"
-                  title="Pour écouter et relire la timeline même sans réseau (au studio)"
-                >
-                  {pinBusy ? 'Téléchargement…' : 'Télécharger sur cet appareil'}
-                </button>
+                <p className="text-sm text-zinc-500">
+                  Audio indisponible hors-ligne — appuie sur « Télécharger sur cet
+                  appareil » quand tu as du réseau.
+                </p>
               )}
             </div>
-            {actionError && (
-              <p className="mt-2 text-sm text-red-400">{actionError}</p>
-            )}
           </div>
 
           <section className="mt-5">
-            {analysis?.status === 'error' && (
-              <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-300">
-                L'analyse a échoué : {analysis.error ?? 'erreur inconnue'}
-              </div>
-            )}
-
-            {analysisInProgress && (
-              <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-4 text-sm text-zinc-400">
-                <span className="mr-2 inline-block h-3 w-3 animate-pulse rounded-full bg-amber-400 align-middle" />
-                Analyse en cours — compte quelques minutes pour une répète d'une
-                heure. La page se met à jour toute seule.
-              </div>
-            )}
-
-            {!analysis && (
-              <p className="text-sm text-zinc-500">
-                Pas encore d'analyse pour cet enregistrement.
-              </p>
-            )}
-
             {entries && timeline && (
               <>
                 <div className="mb-3 flex items-center justify-between">
@@ -500,17 +729,6 @@ export function RecordingPage() {
                     ),
                   )}
                 </ol>
-                <p className="mt-4 text-xs text-zinc-600">
-                  Timeline générée automatiquement le{' '}
-                  {new Date(timeline.generatedAt).toLocaleString('fr-FR')}
-                  {timeline.editedAt && (
-                    <>
-                      {' '}
-                      · corrigée le{' '}
-                      {new Date(timeline.editedAt).toLocaleString('fr-FR')}
-                    </>
-                  )}
-                </p>
               </>
             )}
           </section>

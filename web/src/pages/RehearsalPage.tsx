@@ -161,14 +161,14 @@ export function RehearsalPage() {
                 <button
                   onClick={() => void startEditing()}
                   disabled={!online}
-                  className="text-zinc-500 underline-offset-2 hover:text-zinc-300 hover:underline disabled:opacity-40"
+                  className="cursor-pointer text-zinc-500 underline-offset-2 hover:text-zinc-300 hover:underline disabled:opacity-40"
                 >
                   Modifier
                 </button>
                 <button
                   onClick={() => void askDelete()}
                   disabled={!online}
-                  className="text-zinc-500 underline-offset-2 hover:text-red-400 hover:underline disabled:opacity-40"
+                  className="cursor-pointer text-zinc-500 underline-offset-2 hover:text-red-400 hover:underline disabled:opacity-40"
                 >
                   Supprimer
                 </button>
