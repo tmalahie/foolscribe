@@ -634,11 +634,6 @@ function TimelineRow({
                   {entry.text}
                 </span>
               )}
-              {entry.endSec != null && (
-                <span className="ml-2 font-normal text-zinc-500">
-                  jusqu'à {formatTimecode(entry.endSec)}
-                </span>
-              )}
             </span>
           ) : (
             <span className="text-sm text-zinc-200">{entry.text}</span>
@@ -691,9 +686,6 @@ function EntryEditor({
 }) {
   const isMusic = entry.type === 'music';
   const [timecode, setTimecode] = useState(formatTimecode(entry.timecodeSec));
-  const [endTimecode, setEndTimecode] = useState(
-    entry.endSec != null ? formatTimecode(entry.endSec) : '',
-  );
   const [text, setText] = useState(entry.text ?? '');
   const [busy, setBusy] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
@@ -706,15 +698,12 @@ function EntryEditor({
     }
     let updated: TimelineEntry;
     if (isMusic) {
-      const endSec = endTimecode.trim() ? parseTimecode(endTimecode) : undefined;
-      if (endTimecode.trim() && endSec == null) {
-        setLocalError('Timecode de fin invalide (format attendu : m:ss)');
-        return;
-      }
-      if (endSec != null && endSec < timecodeSec) {
-        setLocalError('La fin doit être après le début');
-        return;
-      }
+      // endSec n'est plus affiché ni éditable, mais on le conserve tel quel :
+      // il sert en interne au slider de section (dernière ligne de la timeline).
+      const endSec =
+        entry.endSec != null && entry.endSec >= timecodeSec
+          ? entry.endSec
+          : undefined;
       updated = {
         timecodeSec,
         type: 'music',
@@ -765,17 +754,7 @@ function EntryEditor({
           placeholder="m:ss"
           className="w-20 rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1.5 text-center font-mono text-xs outline-none focus:border-amber-400"
         />
-        {isMusic && (
-          <>
-            <span className="text-sm text-violet-400">♪ [MUSIQUE] jusqu'à</span>
-            <input
-              value={endTimecode}
-              onChange={(e) => setEndTimecode(e.target.value)}
-              placeholder="m:ss"
-              className="w-20 rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1.5 text-center font-mono text-xs outline-none focus:border-amber-400"
-            />
-          </>
-        )}
+        {isMusic && <span className="text-sm text-violet-400">♪ [MUSIQUE]</span>}
       </div>
       {isMusic ? (
         <input
