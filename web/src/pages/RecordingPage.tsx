@@ -151,7 +151,7 @@ export function RecordingPage() {
     const audio = audioRef.current;
     if (!audio) return;
     audio.currentTime = seconds;
-    void audio.play().catch(() => {});
+    void audio.play().catch(() => { });
   };
 
   const skip = (delta: number) => {
@@ -338,13 +338,29 @@ export function RecordingPage() {
               {pinned ? (
                 <span className="inline-flex overflow-hidden rounded-lg border border-emerald-500/40">
                   <span className="bg-emerald-500/10 px-3 py-1.5 text-sm text-emerald-400">
-                    ✓ Disponible sur cet appareil
+                    ✓ Téléchargé
                   </span>
                   <button
                     onClick={() => setConfirmingUnpin(true)}
-                    className="border-l border-emerald-500/40 px-3 py-1.5 text-sm text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
+                    title="Effacer de cet appareil"
+                    aria-label="Effacer de cet appareil"
+                    className="flex items-center border-l border-emerald-500/40 px-2.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 cursor-pointer"
                   >
-                    Effacer
+                    <svg
+                      viewBox="0 0 24 24"
+                      className="h-4 w-4"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.8"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <path d="M3 6h18" />
+                      <path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2" />
+                      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+                      <path d="M10 11v6" />
+                      <path d="M14 11v6" />
+                    </svg>
                   </button>
                 </span>
               ) : (
@@ -410,11 +426,10 @@ export function RecordingPage() {
                     <button
                       onClick={() => void toggleEditMode()}
                       disabled={!online && !editMode}
-                      className={`rounded-lg border px-2.5 py-1 text-xs disabled:opacity-40 ${
-                        editMode
-                          ? 'border-amber-400/50 bg-amber-400/10 text-amber-400'
-                          : 'border-zinc-700 text-zinc-300 hover:bg-zinc-800'
-                      }`}
+                      className={`rounded-lg border px-2.5 py-1 text-xs disabled:opacity-40 ${editMode
+                        ? 'border-amber-400/50 bg-amber-400/10 text-amber-400'
+                        : 'border-zinc-700 text-zinc-300 hover:bg-zinc-800'
+                        }`}
                     >
                       {editMode ? 'Terminer' : 'Corriger la timeline'}
                     </button>
@@ -490,11 +505,10 @@ export function RecordingPage() {
           }
           message={
             analysis?.status === 'done'
-              ? `La timeline sera entièrement régénérée et remplacée — y compris les corrections faites à la main.${
-                  detail?.transcriptionCached
-                    ? ' La transcription est déjà en mémoire : c’est l’affaire d’une minute ou deux.'
-                    : ''
-                }`
+              ? `La timeline sera entièrement régénérée et remplacée — y compris les corrections faites à la main.${detail?.transcriptionCached
+                ? ' La transcription est déjà en mémoire : c’est l’affaire d’une minute ou deux.'
+                : ''
+              }`
               : 'L’enregistrement va être transcrit puis résumé en une timeline chronologique : discussions résumées et passages joués, avec timecodes cliquables. Compte quelques minutes pour une répète d’une heure — la page se mettra à jour toute seule.'
           }
           confirmLabel={analysis?.status === 'done' ? 'Relancer' : 'Lancer'}
@@ -537,7 +551,7 @@ export function RecordingPage() {
           busyLabel="Suppression…"
           onConfirm={async () => {
             await api.delete(`/api/recordings/${id}`);
-            await unpinRecording(id).catch(() => {});
+            await unpinRecording(id).catch(() => { });
             navigate(`/rehearsals/${recording.rehearsal_id}`);
           }}
           onCancel={() => setConfirmingDelete(false)}
@@ -571,16 +585,14 @@ function TimelineRow({
     <li ref={ref} className="flex items-start gap-1">
       <button
         onClick={() => onSeek(entry.timecodeSec)}
-        className={`flex w-full min-w-0 items-baseline gap-3 rounded-lg px-3 py-2 text-left transition-colors ${
-          active
-            ? 'bg-amber-400/10 ring-1 ring-amber-400/40'
-            : 'hover:bg-zinc-900'
-        }`}
+        className={`flex w-full min-w-0 items-baseline gap-3 rounded-lg px-3 py-2 text-left transition-colors ${active
+          ? 'bg-amber-400/10 ring-1 ring-amber-400/40'
+          : 'hover:bg-zinc-900'
+          }`}
       >
         <span
-          className={`shrink-0 font-mono text-xs tabular-nums ${
-            active ? 'text-amber-400' : 'text-zinc-500'
-          }`}
+          className={`shrink-0 font-mono text-xs tabular-nums ${active ? 'text-amber-400' : 'text-zinc-500'
+            }`}
         >
           {formatTimecode(entry.timecodeSec)}
         </span>
