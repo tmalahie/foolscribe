@@ -149,7 +149,7 @@ rehearsalsRouter.get(
          SELECT MAX(a2.id) FROM analyses a2 WHERE a2.recording_id = rec.id
        )
        WHERE rec.rehearsal_id = ?
-       ORDER BY rec.created_at ASC, rec.id ASC`,
+       ORDER BY rec.filename ASC, rec.id ASC`,
       [id],
     );
     res.json({ rehearsal: rehearsals[0], recordings });

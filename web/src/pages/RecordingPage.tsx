@@ -33,6 +33,7 @@ export function RecordingPage() {
   const [pinBusy, setPinBusy] = useState(false);
   const [pinnedAudioUrl, setPinnedAudioUrl] = useState<string | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState<number | null>(null);
   const [renaming, setRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState('');
   const [renameBusy, setRenameBusy] = useState(false);
@@ -158,6 +159,14 @@ export function RecordingPage() {
     const audio = audioRef.current;
     if (!audio) return;
     audio.currentTime = Math.max(0, audio.currentTime + delta);
+  };
+
+  // Seek sans déclencher la lecture (utilisé par le slider de section).
+  const scrubTo = (seconds: number) => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.currentTime = seconds;
+    setCurrentTime(seconds);
   };
 
   const entries = detail?.analysis?.timeline?.entries;
@@ -303,6 +312,10 @@ export function RecordingPage() {
                   src={audioSrc}
                   className="min-w-0 flex-1"
                   onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
+                  onLoadedMetadata={(e) => {
+                    const d = e.currentTarget.duration;
+                    setDuration(Number.isFinite(d) ? d : null);
+                  }}
                 />
                 <button
                   onClick={() => skip(10)}
@@ -473,7 +486,14 @@ export function RecordingPage() {
                         key={i}
                         entry={entry}
                         active={i === activeIndex}
+                        sectionEnd={
+                          entries[i + 1]?.timecodeSec ??
+                          (entry.type === 'music' ? entry.endSec : undefined) ??
+                          (duration != null ? Math.floor(duration) : undefined)
+                        }
+                        progressTime={currentTime}
                         onSeek={seekTo}
+                        onScrub={scrubTo}
                         onEdit={editMode ? () => setEditingIndex(i) : undefined}
                       />
                     ),
@@ -564,12 +584,18 @@ export function RecordingPage() {
 function TimelineRow({
   entry,
   active,
+  sectionEnd,
+  progressTime,
   onSeek,
+  onScrub,
   onEdit,
 }: {
   entry: TimelineEntry;
   active: boolean;
+  sectionEnd?: number;
+  progressTime: number;
   onSeek: (seconds: number) => void;
+  onScrub: (seconds: number) => void;
   onEdit?: () => void;
 }) {
   const ref = useRef<HTMLLIElement>(null);
@@ -581,42 +607,72 @@ function TimelineRow({
   }, [active]);
 
   const isMusic = entry.type === 'music';
+  const showSlider =
+    active && sectionEnd != null && sectionEnd > entry.timecodeSec + 1;
+
   return (
-    <li ref={ref} className="flex items-start gap-1">
-      <button
-        onClick={() => onSeek(entry.timecodeSec)}
-        className={`flex w-full min-w-0 items-baseline gap-3 rounded-lg px-3 py-2 text-left transition-colors ${active
-          ? 'bg-amber-400/10 ring-1 ring-amber-400/40'
-          : 'hover:bg-zinc-900'
-          }`}
-      >
-        <span
-          className={`shrink-0 font-mono text-xs tabular-nums ${active ? 'text-amber-400' : 'text-zinc-500'
+    <li ref={ref}>
+      <div className="flex items-start gap-1">
+        <button
+          onClick={() => onSeek(entry.timecodeSec)}
+          className={`flex w-full min-w-0 items-baseline gap-3 rounded-lg px-3 py-2 text-left transition-colors ${active
+            ? 'bg-amber-400/10 ring-1 ring-amber-400/40'
+            : 'hover:bg-zinc-900'
+            } ${showSlider ? 'rounded-b-none' : ''}`}
+        >
+          <span
+            className={`shrink-0 font-mono text-xs tabular-nums ${active ? 'text-amber-400' : 'text-zinc-500'
+              }`}
+          >
+            {formatTimecode(entry.timecodeSec)}
+          </span>
+          {isMusic ? (
+            <span className="text-sm font-medium tracking-wide text-violet-400">
+              ♪ [MUSIQUE]
+              {entry.text && (
+                <span className="ml-2 font-normal text-violet-300">
+                  {entry.text}
+                </span>
+              )}
+              {entry.endSec != null && (
+                <span className="ml-2 font-normal text-zinc-500">
+                  jusqu'à {formatTimecode(entry.endSec)}
+                </span>
+              )}
+            </span>
+          ) : (
+            <span className="text-sm text-zinc-200">{entry.text}</span>
+          )}
+        </button>
+        {onEdit && (
+          <button
+            onClick={onEdit}
+            className="mt-1.5 shrink-0 rounded-md border border-zinc-700 px-1.5 py-0.5 text-xs text-zinc-400 hover:bg-zinc-800"
+            title="Corriger cette ligne"
+          >
+            ✎
+          </button>
+        )}
+      </div>
+      {showSlider && (
+        <div
+          className={`flex items-center gap-2 rounded-b-lg bg-amber-400/10 px-3 pb-2 ${onEdit ? 'mr-7' : ''
             }`}
         >
-          {formatTimecode(entry.timecodeSec)}
-        </span>
-        {isMusic ? (
-          <span className="text-sm font-medium tracking-wide text-violet-400">
-            ♪ [MUSIQUE]
-            {entry.endSec != null && (
-              <span className="ml-2 font-normal text-zinc-500">
-                jusqu'à {formatTimecode(entry.endSec)}
-              </span>
-            )}
+          <input
+            type="range"
+            min={entry.timecodeSec}
+            max={sectionEnd}
+            step={1}
+            value={Math.min(Math.max(progressTime, entry.timecodeSec), sectionEnd)}
+            onChange={(e) => onScrub(Number(e.target.value))}
+            className="h-1 w-full cursor-pointer accent-amber-400"
+            aria-label="Position dans cette section"
+          />
+          <span className="shrink-0 font-mono text-[10px] tabular-nums text-zinc-500">
+            {formatTimecode(sectionEnd)}
           </span>
-        ) : (
-          <span className="text-sm text-zinc-200">{entry.text}</span>
-        )}
-      </button>
-      {onEdit && (
-        <button
-          onClick={onEdit}
-          className="mt-1.5 shrink-0 rounded-md border border-zinc-700 px-1.5 py-0.5 text-xs text-zinc-400 hover:bg-zinc-800"
-          title="Corriger cette ligne"
-        >
-          ✎
-        </button>
+        </div>
       )}
     </li>
   );
@@ -659,7 +715,12 @@ function EntryEditor({
         setLocalError('La fin doit être après le début');
         return;
       }
-      updated = { timecodeSec, type: 'music', ...(endSec != null ? { endSec } : {}) };
+      updated = {
+        timecodeSec,
+        type: 'music',
+        ...(text.trim() ? { text: text.trim() } : {}),
+        ...(endSec != null ? { endSec } : {}),
+      };
     } else {
       if (!text.trim()) {
         setLocalError('Le texte ne peut pas être vide');
@@ -716,7 +777,14 @@ function EntryEditor({
           </>
         )}
       </div>
-      {!isMusic && (
+      {isMusic ? (
+        <input
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          placeholder="Libellé (optionnel, ex. refrain idée 2)"
+          className="mt-2 w-full rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1.5 text-sm outline-none focus:border-amber-400"
+        />
+      ) : (
         <textarea
           value={text}
           onChange={(e) => setText(e.target.value)}

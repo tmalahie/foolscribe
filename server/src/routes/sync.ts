@@ -5,7 +5,8 @@ import { config } from '../config';
 import { pool } from '../db';
 import { listChildFolders, listFiles, looksLikeAudio } from '../drive';
 import { HttpError, wrap } from '../errors';
-import type { RehearsalRow } from '../types';
+import { deleteObject } from '../storage';
+import type { RecordingRow, RehearsalRow } from '../types';
 
 export const syncRouter = Router();
 
@@ -62,6 +63,7 @@ syncRouter.post(
     );
 
     const folders = await listChildFolders(config.google.driveRootFolderId);
+    const driveFileIds = new Set<string>();
     for (const folder of folders) {
       // La date déduite du nom ne remplit que les trous : une date posée à la
       // main dans l'app n'est jamais écrasée par la synchro.
@@ -82,6 +84,7 @@ syncRouter.post(
       const files = (await listFiles(folder.id)).filter(looksLikeAudio);
       scannedFiles += files.length;
       for (const file of files) {
+        driveFileIds.add(file.id);
         await pool.query<ResultSetHeader>(
           `INSERT INTO recordings (rehearsal_id, filename, drive_file_id, size_bytes)
            VALUES (?, ?, ?, ?)
@@ -92,11 +95,42 @@ syncRouter.post(
       }
     }
 
+    // Drive est la source de vérité dans les deux sens : ce qui a disparu de
+    // Drive disparaît aussi de la base (et son mirror de l'Object Storage).
+    // Les enregistrements des dossiers supprimés passent ici aussi (leurs
+    // fichiers ne sont plus listés), ce qui nettoie leur audio avant que la
+    // suppression de la répète ne fasse le reste en cascade.
+    let removedRecordings = 0;
+    const [allRecordings] = await pool.query<RecordingRow[]>(
+      'SELECT * FROM recordings WHERE drive_file_id IS NOT NULL',
+    );
+    for (const rec of allRecordings) {
+      if (driveFileIds.has(rec.drive_file_id!)) continue;
+      if (rec.object_key) {
+        await deleteObject(rec.object_key).catch(() => {}); // best effort
+      }
+      await pool.query('DELETE FROM recordings WHERE id = ?', [rec.id]);
+      removedRecordings++;
+    }
+
+    let removedRehearsals = 0;
+    const driveFolderIds = new Set(folders.map((f) => f.id));
+    const [allRehearsals] = await pool.query<RehearsalRow[]>(
+      'SELECT * FROM rehearsals WHERE drive_folder_id IS NOT NULL',
+    );
+    for (const rehearsal of allRehearsals) {
+      if (driveFolderIds.has(rehearsal.drive_folder_id!)) continue;
+      await pool.query('DELETE FROM rehearsals WHERE id = ?', [rehearsal.id]);
+      removedRehearsals++;
+    }
+
     res.json({
       rehearsals: folders.length,
       recordings: scannedFiles,
       newRehearsals,
       newRecordings,
+      removedRehearsals,
+      removedRecordings,
     });
   }),
 );

@@ -145,7 +145,15 @@ recordingsRouter.put(
         if (endSec != null && (!Number.isFinite(endSec) || endSec < timecodeSec)) {
           throw new HttpError(400, 'Fin de passage musical invalide');
         }
-        return { timecodeSec, type: 'music', ...(endSec != null ? { endSec } : {}) };
+        // Libellé optionnel (« refrain idée 2 »…)
+        const label =
+          typeof e.text === 'string' && e.text.trim() ? e.text.trim() : undefined;
+        return {
+          timecodeSec,
+          type: 'music',
+          ...(label ? { text: label } : {}),
+          ...(endSec != null ? { endSec } : {}),
+        };
       }
       if (e.type !== 'discussion') {
         throw new HttpError(400, 'Type d\'entrée invalide');

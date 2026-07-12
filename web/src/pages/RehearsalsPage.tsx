@@ -97,9 +97,15 @@ export function RehearsalsPage() {
       const result = await api.post<{
         newRehearsals: number;
         newRecordings: number;
+        removedRehearsals: number;
+        removedRecordings: number;
       }>('/api/sync');
+      const removals =
+        result.removedRehearsals || result.removedRecordings
+          ? `, ${result.removedRehearsals + result.removedRecordings} supprimé(s)`
+          : '';
       setSyncMessage(
-        `Synchronisation terminée : ${result.newRehearsals} nouvelle(s) répète(s), ${result.newRecordings} nouveau(x) enregistrement(s).`,
+        `Synchronisation terminée : ${result.newRehearsals} nouvelle(s) répète(s), ${result.newRecordings} nouveau(x) enregistrement(s)${removals}.`,
       );
       load();
     } catch (err) {

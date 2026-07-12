@@ -395,9 +395,10 @@ interface Line {
  * secondes (t=Ns) pour que le LLM le recopie sans conversion.
  */
 function buildTranscript(words: Word[], musicSpans: MusicSpan[]): string {
-  const lines: Line[] = musicSpans.map((span) => ({
+  // Numérotés (#k) pour que le LLM puisse rattacher un libellé à un passage.
+  const lines: Line[] = musicSpans.map((span, i) => ({
     start: span.start,
-    text: `[MUSIQUE] ${formatTimecode(span.start)}–${formatTimecode(span.end)} (t=${Math.floor(span.start)}s–${Math.floor(span.end)}s)`,
+    text: `[MUSIQUE #${i + 1}] ${formatTimecode(span.start)}–${formatTimecode(span.end)} (t=${Math.floor(span.start)}s–${Math.floor(span.end)}s)`,
   }));
 
   let currentSpeaker: string | undefined;
@@ -462,10 +463,15 @@ interface DiscussionEntry {
   text: string;
 }
 
+interface MusicLabel {
+  index: number;
+  label: string;
+}
+
 const TIMELINE_TOOL: Anthropic.Tool = {
   name: 'submit_timeline',
   description:
-    'Soumet la timeline finale de la répétition (entrées de discussion uniquement, ordre chronologique).',
+    'Soumet la timeline finale de la répétition : entrées de discussion (ordre chronologique) et libellés des passages joués identifiables.',
   input_schema: {
     type: 'object',
     properties: {
@@ -489,8 +495,29 @@ const TIMELINE_TOOL: Anthropic.Tool = {
           additionalProperties: false,
         },
       },
+      musicLabels: {
+        type: 'array',
+        description:
+          'Libellés des passages [MUSIQUE #k] identifiables grâce au contexte ; omettre les passages non identifiables (tableau vide accepté)',
+        items: {
+          type: 'object',
+          properties: {
+            index: {
+              type: 'integer',
+              description: 'Le k de la ligne [MUSIQUE #k] correspondante',
+            },
+            label: {
+              type: 'string',
+              description:
+                'Libellé court : quel morceau / quelle partie / quelle intention (ex. « 1er morceau en entier », « refrain idée 2 »)',
+            },
+          },
+          required: ['index', 'label'],
+          additionalProperties: false,
+        },
+      },
     },
-    required: ['entries'],
+    required: ['entries', 'musicLabels'],
     additionalProperties: false,
   },
 };
@@ -502,19 +529,20 @@ const TIMELINE_TOOL: Anthropic.Tool = {
  */
 async function generateDiscussionEntries(
   transcript: string,
-): Promise<DiscussionEntry[]> {
+): Promise<{ entries: DiscussionEntry[]; musicLabels: MusicLabel[] }> {
   const anthropic = new Anthropic({ apiKey: config.anthropicApiKey });
 
   const prompt = `Voici la transcription horodatée et diarisée d'un enregistrement brut d'une répétition d'un groupe de rock. Le groupe compte jusqu'à ${MAX_SPEAKERS} musiciens (tous ne sont pas forcément présents ce jour-là) : ${MUSICIANS}.
 
-Chaque ligne de discussion est au format "M:SS (t=Ns) [speaker_id] texte", où t=Ns est le timecode de début en secondes. Les passages joués sont indiqués à titre de contexte par des lignes "[MUSIQUE] M:SS–M:SS (t=Ns–Ns)". Les timecodes sont mesurés et fiables : réutilise-les tels quels via leur valeur t=, n'en invente aucun.
+Chaque ligne de discussion est au format "M:SS (t=Ns) [speaker_id] texte", où t=Ns est le timecode de début en secondes. Les passages joués sont indiqués par des lignes "[MUSIQUE #k] M:SS–M:SS (t=Ns–Ns)". Les timecodes sont mesurés et fiables : réutilise-les tels quels via leur valeur t=, n'en invente aucun.
 
 Le but est de générer un résumé de la répétition sous la forme d'une timeline chronologique concise (style prise de notes propre), soumise via l'outil submit_timeline. Va droit au but, évite la prose inutile et les longues phrases denses.
 
 Consignes :
-- Ne produis QUE des entrées de discussion : résumé rapide et direct des décisions, retours ou problèmes (ex. « Flavien propose d'ajouter un solo de guitare après le 2e refrain », « Le refrain manque d'énergie : montée progressive en intensité », « Décision de rejouer le morceau depuis le début »). Les passages [MUSIQUE] seront réinjectés automatiquement : ne crée AUCUNE entrée pour eux.
+- entries : uniquement des entrées de discussion, résumé rapide et direct des décisions, retours ou problèmes (ex. « Flavien propose d'ajouter un solo de guitare après le 2e refrain », « Le refrain manque d'énergie : montée progressive en intensité », « Décision de rejouer le morceau depuis le début »). Les passages [MUSIQUE] seront réinjectés automatiquement : ne crée AUCUNE entrée pour eux.
 - Regroupe par idée : une entrée par décision/retour/sujet, pas une par phrase. timecodeSec = la valeur t= de la première ligne du passage résumé.
-- Noms : la diarisation est imparfaite (elle rate parfois un musicien présent, ce qui décale tout le mapping). N'utilise un prénom dans un texte que si l'identification est solide (la personne est nommée ou interpellée dans l'échange lui-même) ; au moindre doute, préfère une tournure impersonnelle (« proposition d'ajouter un solo… », « décision de… ») — une timeline sans prénom vaut mieux qu'une timeline avec le mauvais prénom.
+- musicLabels : pour chaque passage [MUSIQUE #k] que le contexte permet d'identifier (les discussions avant/après disent ce qui va être ou vient d'être joué), fournis un libellé court et utile : quel morceau, quelle partie, quelle intention (ex. « 1er morceau en entier », « refrain idée 2 », « reprise depuis le pont »). Si le contexte ne permet pas d'identifier un passage, n'invente rien : omets-le simplement.
+- Prénoms : tu connais le rôle de chacun (${MUSICIANS}). Utilise le prénom quand la personne est identifiable de façon solide : elle est nommée ou interpellée dans l'échange, OU son rôle ne laisse aucun doute dans le contexte (celle qui chante ou parle de ses paroles = Jade ; celui qui parle de sa batterie = Tristan, etc.). N'écris jamais « la chanteuse » ou « le batteur » : mets le prénom. En revanche, ne déduis JAMAIS un prénom de la seule étiquette speaker_N (la diarisation rate parfois un musicien présent, ce qui décale tout le mapping) ; si l'identification reste incertaine, tourne la phrase de façon impersonnelle (« proposition d'ajouter un solo… ») — mieux vaut aucun prénom qu'un prénom faux.
 - Quand quelqu'un chantonne ou fredonne une mélodie pour illustrer un propos pendant une discussion, ce n'est PAS un passage musical ; ça fait partie de la discussion.
 
 --- TRANSCRIPTION ---
@@ -537,11 +565,14 @@ Soumets la timeline finale via l'outil.`;
   if (!toolBlock) {
     throw new Error('Réponse du LLM sans appel d\'outil submit_timeline');
   }
-  const { entries } = toolBlock.input as { entries: DiscussionEntry[] };
+  const { entries, musicLabels } = toolBlock.input as {
+    entries: DiscussionEntry[];
+    musicLabels?: MusicLabel[];
+  };
   if (!Array.isArray(entries)) {
     throw new Error('Sortie structurée invalide : entries manquant');
   }
-  return entries;
+  return { entries, musicLabels: Array.isArray(musicLabels) ? musicLabels : [] };
 }
 
 /** Exécute la pipeline complète pour un enregistrement et renvoie la timeline. */
@@ -577,8 +608,28 @@ export async function runPipeline(recordingId: number): Promise<Timeline> {
   }
 
   log(`Étage 2 — ${REASONING_MODEL} (raisonnement sur la transcription)…`);
-  const discussionEntries = await generateDiscussionEntries(transcript);
-  log(`Étage 2 terminé : ${discussionEntries.length} entrée(s) de discussion`);
+  const { entries: discussionEntries, musicLabels } =
+    await generateDiscussionEntries(transcript);
+  log(
+    `Étage 2 terminé : ${discussionEntries.length} entrée(s) de discussion, ${musicLabels.length} passage(s) musique labellisé(s)${
+      musicLabels.length
+        ? ' (' + musicLabels.map((l) => `#${l.index} « ${l.label} »`).join(', ') + ')'
+        : ''
+    }`,
+  );
+
+  const labelByIndex = new Map(
+    musicLabels
+      .filter(
+        (l) =>
+          Number.isInteger(l.index) &&
+          l.index >= 1 &&
+          l.index <= musicSpans.length &&
+          typeof l.label === 'string' &&
+          l.label.trim(),
+      )
+      .map((l) => [l.index, l.label.trim()]),
+  );
 
   const entries: TimelineEntry[] = [
     ...discussionEntries.map((e) => ({
@@ -586,9 +637,10 @@ export async function runPipeline(recordingId: number): Promise<Timeline> {
       type: 'discussion' as const,
       text: e.text,
     })),
-    ...musicSpans.map((span) => ({
+    ...musicSpans.map((span, i) => ({
       timecodeSec: Math.floor(span.start),
       type: 'music' as const,
+      ...(labelByIndex.has(i + 1) ? { text: labelByIndex.get(i + 1) } : {}),
       endSec: Math.floor(span.end),
     })),
   ].sort((a, b) => a.timecodeSec - b.timecodeSec);
