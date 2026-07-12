@@ -37,6 +37,8 @@ export function RecordingPage() {
   const [renameValue, setRenameValue] = useState('');
   const [renameBusy, setRenameBusy] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [confirmingAnalyze, setConfirmingAnalyze] = useState(false);
+  const [confirmingUnpin, setConfirmingUnpin] = useState(false);
   const [editMode, setEditMode] = useState(false);
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [draftEntry, setDraftEntry] = useState<TimelineEntry | null>(null);
@@ -100,28 +102,11 @@ export function RecordingPage() {
     return () => clearInterval(interval);
   }, [analysisStatus, load]);
 
-  const analyze = async () => {
-    setActionError(null);
-    if (!(await ensureAuth())) return;
-    try {
-      await api.post(`/api/recordings/${id}/analyze`);
-      void load();
-    } catch (err) {
-      setActionError(
-        err instanceof ApiError ? err.message : 'Lancement impossible',
-      );
-    }
-  };
-
-  const togglePin = async () => {
+  const downloadPin = async () => {
     setPinBusy(true);
     setActionError(null);
     try {
-      if (pinned) {
-        await unpinRecording(id);
-      } else {
-        await pinRecording(id);
-      }
+      await pinRecording(id);
     } catch (err) {
       setActionError(
         err instanceof Error ? err.message : 'Téléchargement impossible',
@@ -336,7 +321,10 @@ export function RecordingPage() {
 
             <div className="mt-3 flex flex-wrap items-center gap-2">
               <button
-                onClick={() => void analyze()}
+                onClick={() => {
+                  setActionError(null);
+                  setConfirmingAnalyze(true);
+                }}
                 disabled={!online || analysisInProgress}
                 className="rounded-lg bg-amber-400 px-3 py-1.5 text-sm font-medium text-zinc-950 hover:bg-amber-300 disabled:cursor-not-allowed disabled:opacity-40"
                 title={online ? undefined : 'Indisponible hors-ligne'}
@@ -347,22 +335,28 @@ export function RecordingPage() {
                     ? 'Relancer l’analyse'
                     : 'Lancer l’analyse'}
               </button>
-              <button
-                onClick={() => void togglePin()}
-                disabled={pinBusy || (!pinned && !online)}
-                className={`rounded-lg border px-3 py-1.5 text-sm disabled:cursor-not-allowed disabled:opacity-40 ${
-                  pinned
-                    ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20'
-                    : 'border-zinc-700 text-zinc-300 hover:bg-zinc-800'
-                }`}
-                title="Pour écouter et relire la timeline même sans réseau (au studio)"
-              >
-                {pinBusy
-                  ? 'Téléchargement…'
-                  : pinned
-                    ? '✓ Téléchargé — retirer'
-                    : 'Télécharger sur cet appareil'}
-              </button>
+              {pinned ? (
+                <>
+                  <span className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-sm text-emerald-400">
+                    ✓ Disponible sur cet appareil
+                  </span>
+                  <button
+                    onClick={() => setConfirmingUnpin(true)}
+                    className="rounded-lg border border-zinc-700 px-3 py-1.5 text-sm text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
+                  >
+                    Retirer
+                  </button>
+                </>
+              ) : (
+                <button
+                  onClick={() => void downloadPin()}
+                  disabled={pinBusy || !online}
+                  className="rounded-lg border border-zinc-700 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-40"
+                  title="Pour écouter et relire la timeline même sans réseau (au studio)"
+                >
+                  {pinBusy ? 'Téléchargement…' : 'Télécharger sur cet appareil'}
+                </button>
+              )}
             </div>
             {actionError && (
               <p className="mt-2 text-sm text-red-400">{actionError}</p>
@@ -487,11 +481,60 @@ export function RecordingPage() {
         </>
       )}
 
+      {confirmingAnalyze && (
+        <ConfirmDialog
+          title={
+            analysis?.status === 'done'
+              ? 'Relancer l’analyse ?'
+              : 'Lancer l’analyse ?'
+          }
+          message={
+            analysis?.status === 'done'
+              ? `La timeline sera entièrement régénérée et remplacée — y compris les corrections faites à la main.${
+                  detail?.transcriptionCached
+                    ? ' La transcription est déjà en mémoire : c’est l’affaire d’une minute ou deux.'
+                    : ''
+                }`
+              : 'L’enregistrement va être transcrit puis résumé en une timeline chronologique : discussions résumées et passages joués, avec timecodes cliquables. Compte quelques minutes pour une répète d’une heure — la page se mettra à jour toute seule.'
+          }
+          confirmLabel={analysis?.status === 'done' ? 'Relancer' : 'Lancer'}
+          busyLabel="Lancement…"
+          tone="primary"
+          onConfirm={async () => {
+            if (!(await ensureAuth())) {
+              setConfirmingAnalyze(false);
+              return;
+            }
+            await api.post(`/api/recordings/${id}/analyze`);
+            setConfirmingAnalyze(false);
+            void load();
+          }}
+          onCancel={() => setConfirmingAnalyze(false)}
+        />
+      )}
+
+      {confirmingUnpin && (
+        <ConfirmDialog
+          title="Retirer de cet appareil ?"
+          message="L’audio et la timeline téléchargés seront supprimés du stockage de cet appareil. L’enregistrement reste bien sûr disponible en ligne."
+          confirmLabel="Retirer"
+          busyLabel="Retrait…"
+          onConfirm={async () => {
+            await unpinRecording(id);
+            setPinned(false);
+            setPinnedAudioUrl(null);
+            setConfirmingUnpin(false);
+          }}
+          onCancel={() => setConfirmingUnpin(false)}
+        />
+      )}
+
       {confirmingDelete && recording && (
         <ConfirmDialog
           title={`Supprimer « ${recording.filename} » ?`}
           message="L'enregistrement et son analyse seront supprimés. Le fichier audio sera mis à la corbeille du Drive du groupe."
           confirmLabel="Supprimer"
+          busyLabel="Suppression…"
           onConfirm={async () => {
             await api.delete(`/api/recordings/${id}`);
             await unpinRecording(id).catch(() => {});

@@ -4,12 +4,16 @@ export function ConfirmDialog({
   title,
   message,
   confirmLabel,
+  busyLabel = 'Un instant…',
+  tone = 'danger',
   onConfirm,
   onCancel,
 }: {
   title: string;
   message: string;
   confirmLabel: string;
+  busyLabel?: string;
+  tone?: 'danger' | 'primary';
   onConfirm: () => Promise<void>;
   onCancel: () => void;
 }) {
@@ -50,9 +54,13 @@ export function ConfirmDialog({
           <button
             onClick={() => void confirm()}
             disabled={busy}
-            className="rounded-lg bg-red-500 px-3 py-2 text-sm font-medium text-white hover:bg-red-400 disabled:opacity-40"
+            className={`rounded-lg px-3 py-2 text-sm font-medium disabled:opacity-40 ${
+              tone === 'danger'
+                ? 'bg-red-500 text-white hover:bg-red-400'
+                : 'bg-amber-400 text-zinc-950 hover:bg-amber-300'
+            }`}
           >
-            {busy ? 'Suppression…' : confirmLabel}
+            {busy ? busyLabel : confirmLabel}
           </button>
         </div>
       </div>

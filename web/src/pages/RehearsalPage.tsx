@@ -254,6 +254,7 @@ export function RehearsalPage() {
           title={`Supprimer « ${rehearsal.name} » ?`}
           message="La répète, ses enregistrements et leurs analyses seront supprimés. Le dossier sera mis à la corbeille du Drive du groupe."
           confirmLabel="Supprimer"
+          busyLabel="Suppression…"
           onConfirm={async () => {
             await api.delete(`/api/rehearsals/${id}`);
             navigate('/');
