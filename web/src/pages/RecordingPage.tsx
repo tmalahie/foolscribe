@@ -96,9 +96,9 @@ function SkipTenIcon({ direction }: { direction: 'back' | 'forward' }) {
   );
 }
 
-function DotsIcon() {
+function DotsIcon({ className = 'h-5 w-5' }: { className?: string }) {
   return (
-    <svg viewBox="0 0 24 24" className="h-5 w-5" fill="currentColor">
+    <svg viewBox="0 0 24 24" className={className} fill="currentColor">
       <circle cx="12" cy="5" r="1.6" />
       <circle cx="12" cy="12" r="1.6" />
       <circle cx="12" cy="19" r="1.6" />
@@ -856,6 +856,7 @@ export function RecordingPage() {
                         onSeek={seekTo}
                         onScrub={scrubTo}
                         onEdit={editMode ? () => setEditingIndex(i) : undefined}
+                        centerOnMount={sharedSeekSec != null}
                         onDownloadSegment={downloadSegment}
                         onShareSegment={shareSegment}
                         segmentBusy={segmentBusy}
@@ -959,29 +960,36 @@ function SegmentMenu({
   canDownload: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const onClick = (e: MouseEvent) => {
-      if (!ref.current?.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener('mousedown', onClick);
-    return () => document.removeEventListener('mousedown', onClick);
-  }, [open]);
 
   return (
-    <div ref={ref} className="relative mr-1 mt-1 shrink-0">
+    <div className="relative mr-1 mt-1.5 shrink-0">
       <button
         onClick={() => setOpen((o) => !o)}
         title="Options du passage"
         aria-label="Options du passage"
         className="cursor-pointer rounded-md p-1 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
       >
-        <DotsIcon />
+        <DotsIcon className="h-3.5 w-3.5" />
       </button>
       {open && (
-        <div className="absolute right-0 top-full z-40 mt-1 w-44 rounded-lg border border-zinc-700 bg-zinc-900 py-1 text-sm shadow-lg">
+        // Voile transparent : le clic « en dehors » atterrit ici et se contente
+        // de refermer le menu, au lieu d'aller relancer la lecture d'un autre
+        // passage. Il couvre aussi le lecteur, d'où le z-index au-dessus.
+        // <button> et non <div> : Safari iOS n'émet pas toujours de clic sur un
+        // élément non interactif.
+        <button
+          type="button"
+          tabIndex={-1}
+          aria-hidden="true"
+          className="fixed inset-0 z-40 cursor-default"
+          onClick={(e) => {
+            e.stopPropagation();
+            setOpen(false);
+          }}
+        />
+      )}
+      {open && (
+        <div className="absolute right-0 top-full z-50 mt-1 w-44 rounded-lg border border-zinc-700 bg-zinc-900 py-1 text-sm shadow-lg">
           <button
             onClick={() => {
               setOpen(false);
@@ -1017,6 +1025,7 @@ function TimelineRow({
   onSeek,
   onScrub,
   onEdit,
+  centerOnMount,
   onDownloadSegment,
   onShareSegment,
   segmentBusy,
@@ -1030,17 +1039,26 @@ function TimelineRow({
   onSeek: (seconds: number) => void;
   onScrub: (seconds: number) => void;
   onEdit?: () => void;
+  centerOnMount: boolean;
   onDownloadSegment: (startSec: number, endSec?: number) => void;
   onShareSegment: (startSec: number) => void;
   segmentBusy: boolean;
   canDownloadSegment: boolean;
 }) {
   const ref = useRef<HTMLLIElement>(null);
+  // Ligne déjà active à son montage *et* position issue d'un lien horodaté : on
+  // centre. Sans ça, la ligne 0 (active à t=0) ferait défiler toute ouverture
+  // normale de la page.
+  const activeOnMount = useRef(active && centerOnMount);
 
   useEffect(() => {
-    if (active) {
-      ref.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-    }
+    if (!active) return;
+    const fromSharedLink = activeOnMount.current;
+    activeOnMount.current = false;
+    ref.current?.scrollIntoView({
+      block: fromSharedLink ? 'center' : 'nearest',
+      behavior: fromSharedLink ? 'auto' : 'smooth',
+    });
   }, [active]);
 
   const isMusic = entry.type === 'music';
@@ -1048,7 +1066,9 @@ function TimelineRow({
     active && sectionEnd != null && sectionEnd > entry.timecodeSec + 1;
 
   return (
-    <li ref={ref} className={`cursor-pointer rounded-lg ${active
+    // scroll-mt/mb réservent la hauteur de l'en-tête collant et du lecteur fixe :
+    // sans elles, scrollIntoView cale la ligne active juste derrière le lecteur.
+    <li ref={ref} className={`scroll-mt-16 scroll-mb-40 cursor-pointer rounded-lg ${active
       ? 'bg-amber-400/10 ring-1 ring-amber-400/40'
       : 'hover:bg-zinc-900'
       }`}>
@@ -1103,7 +1123,7 @@ function TimelineRow({
       </div>
       {showSlider && (
         <div
-          className={`flex items-center gap-2 px-3 pb-2 ${onEdit ? 'mr-16' : 'mr-9'
+          className={`flex items-center gap-2 px-3 pb-2 ${onEdit ? 'mr-14' : 'mr-7'
             }`}
         >
           <input
