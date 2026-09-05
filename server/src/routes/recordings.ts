@@ -1,10 +1,16 @@
+import { spawn } from 'child_process';
 import { Router } from 'express';
+import type { Response } from 'express';
 import { requireAuth } from '../auth';
 import { pool } from '../db';
 import { renameFile, trashFile } from '../drive';
 import { HttpError, wrap } from '../errors';
 import { latestAnalysis, startAnalysis } from '../analysis/jobs';
-import { ensureMirrored, getRecordingOrThrow } from '../recordingService';
+import {
+  downloadToTmp,
+  ensureMirrored,
+  getRecordingOrThrow,
+} from '../recordingService';
 import { deleteObject, getObjectStream, presignGetUrl } from '../storage';
 import type { Timeline, TimelineEntry, TranscriptionRow } from '../types';
 
@@ -72,6 +78,213 @@ recordingsRouter.get(
     // bande passante du serveur.
     const url = await presignGetUrl(key);
     res.redirect(302, url);
+  }),
+);
+
+const SEGMENT_BITRATE = '192k';
+
+/** « 30s », « 1m30s », « 1h02m30s » — même convention que le paramètre ?t= du front. */
+function stampSeconds(seconds: number): string {
+  const total = Math.max(0, Math.floor(seconds));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  const pad = (n: number) => n.toString().padStart(2, '0');
+  if (h > 0) return `${h}h${pad(m)}m${pad(s)}s`;
+  if (m > 0) return `${m}m${pad(s)}s`;
+  return `${s}s`;
+}
+
+function segmentFilename(
+  filename: string,
+  startSec: number,
+  endSec: number | null,
+): string {
+  const base = filename.replace(/\.[^./]+$/, '') || 'extrait';
+  const end = endSec != null ? stampSeconds(endSec) : 'fin';
+  return `${base} ${stampSeconds(startSec)}-${end}.mp3`.replace(
+    /[/\\?%*:|"<>]/g,
+    '_',
+  );
+}
+
+function parseSeconds(raw: unknown): number | null {
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
+/**
+ * Octets gardés en mémoire avant d'écrire quoi que ce soit dans la réponse :
+ * ffmpeg émet l'en-tête MP3 (~150 octets) avant même d'avoir démuxé l'entrée, si
+ * bien qu'un échec de lecture arrive après les premiers octets produits. Tant
+ * qu'on n'a rien envoyé, la réponse reste intacte et le repli local est possible.
+ * ~10 s d'audio à 192 kb/s : les erreurs de démuxage se voient bien avant.
+ */
+const SEGMENT_HOLD_BYTES = 256 * 1024;
+
+/**
+ * Transcode l'extrait vers `res` en streaming. `-ss` avant `-i` = seek à
+ * l'entrée : sur une URL présignée, ffmpeg n'en lit que les octets utiles
+ * (Range HTTP) au lieu de rapatrier tout le fichier.
+ *
+ * `holdBytes` diffère la première écriture (voir SEGMENT_HOLD_BYTES) ; à 0, la
+ * réponse part dès le premier octet.
+ */
+function streamSegment(
+  input: string,
+  startSec: number,
+  durationSec: number | null,
+  res: Response,
+  sendHeaders: () => void,
+  holdBytes: number,
+): Promise<void> {
+  const args = [
+    '-v',
+    'error',
+    // Sans -xerror, ffmpeg sort en 0 même après une erreur de démuxage : on
+    // servirait un MP3 corrompu en croyant que tout s'est bien passé.
+    '-xerror',
+    ...(/^https?:/.test(input)
+      ? ['-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '5']
+      : []),
+    '-ss',
+    startSec.toFixed(3),
+    '-i',
+    input,
+    ...(durationSec != null ? ['-t', durationSec.toFixed(3)] : []),
+    '-vn', // pas de pochette dans l'extrait
+    '-c:a',
+    'libmp3lame',
+    '-b:a',
+    SEGMENT_BITRATE,
+    '-f',
+    'mp3',
+    'pipe:1',
+  ];
+
+  return new Promise<void>((resolve, reject) => {
+    const child = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    let stderr = '';
+    let produced = 0;
+    let committed = false;
+    let settled = false;
+    let held: Buffer[] = [];
+
+    const commit = () => {
+      if (committed) return;
+      committed = true;
+      sendHeaders();
+      for (const chunk of held) res.write(chunk);
+      held = [];
+    };
+    const settle = (err?: Error) => {
+      if (settled) return;
+      settled = true;
+      if (err) reject(err);
+      else resolve();
+    };
+
+    child.stderr.on('data', (chunk: Buffer) => {
+      if (stderr.length < 2000) stderr += chunk.toString();
+    });
+    child.stdout.on('data', (chunk: Buffer) => {
+      produced += chunk.length;
+      if (!committed) {
+        held.push(chunk);
+        if (produced < holdBytes) return;
+        commit();
+        return;
+      }
+      if (!res.write(chunk)) child.stdout.pause();
+    });
+    res.on('drain', () => child.stdout.resume());
+    // Client parti (onglet fermé, partage annulé) : inutile de transcoder dans le vide.
+    res.on('close', () => {
+      if (!res.writableEnded) child.kill('SIGKILL');
+    });
+    child.on('error', settle);
+    child.on('close', (code) => {
+      if (code === 0 && produced > 0) {
+        commit(); // extrait plus court que le tampon : rien n'est encore parti
+        res.end();
+        settle();
+        return;
+      }
+      settle(
+        new Error(
+          code === 0
+            ? 'ffmpeg n’a produit aucun octet (passage hors de l’enregistrement ?)'
+            : `ffmpeg a échoué (code ${code}) : ${stderr.trim().split('\n').pop() ?? ''}`,
+        ),
+      );
+    });
+  });
+}
+
+/**
+ * Extrait audio [start, end[ d'un enregistrement, encodé en MP3 à la volée —
+ * pour télécharger ou partager un passage repéré dans la timeline.
+ */
+recordingsRouter.get(
+  '/:id/segment',
+  wrap(async (req, res) => {
+    const id = parseInt(String(req.params.id), 10);
+    const recording = await getRecordingOrThrow(id);
+
+    const startSec = parseSeconds(req.query.start) ?? 0;
+    const endSec = req.query.end != null ? parseSeconds(req.query.end) : null;
+    if (req.query.end != null && endSec == null) {
+      throw new HttpError(400, 'Fin de passage invalide');
+    }
+    if (endSec != null && endSec <= startSec) {
+      throw new HttpError(400, 'La fin du passage doit suivre son début');
+    }
+    const durationSec = endSec != null ? endSec - startSec : null;
+
+    const key = await ensureMirrored(recording);
+    const name = segmentFilename(recording.filename, startSec, endSec);
+    const sendHeaders = () => {
+      res.setHeader('Content-Type', 'audio/mpeg');
+      res.setHeader('Cache-Control', 'no-store');
+      const ascii = name.replace(/[^\x20-\x7E]/g, '_').replace(/"/g, "'");
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`,
+      );
+    };
+
+    try {
+      try {
+        await streamSegment(
+          await presignGetUrl(key),
+          startSec,
+          durationSec,
+          res,
+          sendHeaders,
+          SEGMENT_HOLD_BYTES,
+        );
+      } catch (err) {
+        if (res.headersSent) throw err;
+        // ffmpeg sans support https, ou Object Storage capricieux : on retombe
+        // sur une copie locale complète (plus lent, mais ça passe toujours).
+        console.warn(
+          `[extrait #${id}] lecture distante impossible, repli sur une copie locale :`,
+          err,
+        );
+        const localPath = await downloadToTmp(recording);
+        // Plus de repli derrière : on peut streamer dès le premier octet.
+        await streamSegment(localPath, startSec, durationSec, res, sendHeaders, 0);
+      }
+    } catch (err) {
+      console.error(`[extrait #${id}]`, err);
+      if (res.headersSent) {
+        // Déjà en train de streamer : on coupe net, le client verra un transfert
+        // interrompu plutôt qu'un fichier tronqué qui a l'air valide.
+        res.destroy();
+        return;
+      }
+      throw new HttpError(502, 'Extraction du passage impossible');
+    }
   }),
 );
 

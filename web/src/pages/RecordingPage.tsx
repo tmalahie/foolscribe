@@ -1,8 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
-import { api, ApiError, formatTimecode, parseTimecode } from '../api';
+import {
+  Link,
+  useNavigate,
+  useParams,
+  useSearchParams,
+} from 'react-router-dom';
+import {
+  api,
+  ApiError,
+  formatTimecode,
+  formatTimeParam,
+  parseTimecode,
+  parseTimeParam,
+} from '../api';
 import { useAuth } from '../auth';
 import { ConfirmDialog } from '../components/ConfirmDialog';
+import { ShareButton } from '../components/ShareButton';
 import {
   getPinnedAudio,
   getPinnedDetail,
@@ -16,9 +29,21 @@ import type {
   Timeline,
   TimelineEntry,
 } from '../types';
+import { shareLink } from '../share';
 import { useOnline } from '../useOnline';
 
 const PLAYBACK_RATES = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
+
+/** « Répète du 3 mai 1m30s-3m05s.mp3 » — même convention que côté serveur. */
+function segmentFileName(
+  filename: string,
+  startSec: number,
+  endSec?: number,
+): string {
+  const base = filename.replace(/\.[^./]+$/, '') || 'extrait';
+  const end = endSec != null ? formatTimeParam(endSec) : 'fin';
+  return `${base} ${formatTimeParam(startSec)}-${end}.mp3`;
+}
 
 function PlayIcon() {
   return (
@@ -111,8 +136,33 @@ export function RecordingPage() {
   const [playerMenuOpen, setPlayerMenuOpen] = useState(false);
   const [rateSubmenuOpen, setRateSubmenuOpen] = useState(false);
   const [downloadingAudio, setDownloadingAudio] = useState(false);
+  const [segmentBusy, setSegmentBusy] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const playerMenuRef = useRef<HTMLDivElement>(null);
+  const toastTimer = useRef<number | null>(null);
+  // Position demandée par un lien partagé, appliquée dès que <audio> est prêt.
+  const pendingSeekRef = useRef<number | null>(null);
+  const userSeekedRef = useRef(false);
+
+  const [searchParams] = useSearchParams();
+  const sharedSeekSec = useMemo(
+    () => parseTimeParam(searchParams.get('t')),
+    [searchParams],
+  );
+
+  const showToast = useCallback((message: string) => {
+    setToast(message);
+    if (toastTimer.current) window.clearTimeout(toastTimer.current);
+    toastTimer.current = window.setTimeout(() => setToast(null), 2500);
+  }, []);
+
+  useEffect(
+    () => () => {
+      if (toastTimer.current) window.clearTimeout(toastTimer.current);
+    },
+    [],
+  );
 
   const load = useCallback(async () => {
     try {
@@ -220,6 +270,7 @@ export function RecordingPage() {
   const seekTo = (seconds: number) => {
     const audio = audioRef.current;
     if (!audio) return;
+    userSeekedRef.current = true;
     audio.currentTime = seconds;
     void audio.play().catch(() => { });
   };
@@ -227,12 +278,14 @@ export function RecordingPage() {
   const skip = (delta: number) => {
     const audio = audioRef.current;
     if (!audio) return;
+    userSeekedRef.current = true;
     audio.currentTime = Math.max(0, audio.currentTime + delta);
   };
 
   const togglePlay = () => {
     const audio = audioRef.current;
     if (!audio) return;
+    userSeekedRef.current = true;
     if (audio.paused) void audio.play().catch(() => { });
     else audio.pause();
   };
@@ -296,6 +349,7 @@ export function RecordingPage() {
   const scrubTo = (seconds: number) => {
     const audio = audioRef.current;
     if (!audio) return;
+    userSeekedRef.current = true;
     audio.currentTime = seconds;
     setCurrentTime(seconds);
   };
@@ -347,10 +401,73 @@ export function RecordingPage() {
     return index;
   }, [entries, currentTime]);
 
+  const recording = detail?.recording;
+
   // Hors-ligne avec audio téléchargé → blob local.
   const audioSrc = pinnedAudioUrl ?? (online ? `/api/recordings/${id}/audio` : null);
 
-  const recording = detail?.recording;
+  // Lien partagé « ?t=1m30s » : on positionne le lecteur là (et donc la ligne
+  // active de la timeline). Re-armé si la source change — le passage de l'URL
+  // réseau au blob épinglé recharge l'élément <audio> — tant que l'utilisateur
+  // n'a pas lui-même bougé la lecture.
+  useEffect(() => {
+    if (sharedSeekSec == null || userSeekedRef.current) return;
+    setCurrentTime(sharedSeekSec);
+    const audio = audioRef.current;
+    if (audio && audio.readyState >= 1) {
+      audio.currentTime = sharedSeekSec;
+      pendingSeekRef.current = null;
+    } else {
+      pendingSeekRef.current = sharedSeekSec;
+    }
+  }, [sharedSeekSec, audioSrc]);
+
+  const pageUrl = `${window.location.origin}/recordings/${id}`;
+
+  // Extrait audio d'un passage : le serveur le découpe et le réencode en MP3.
+  const downloadSegment = async (startSec: number, endSec?: number) => {
+    if (segmentBusy) return;
+    setSegmentBusy(true);
+    setToast(null);
+    try {
+      const params = new URLSearchParams({ start: String(Math.floor(startSec)) });
+      if (endSec != null) params.set('end', String(Math.ceil(endSec)));
+      const res = await fetch(`/api/recordings/${id}/segment?${params}`);
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as {
+          error?: string;
+        } | null;
+        throw new Error(body?.error ?? `Erreur ${res.status}`);
+      }
+      const url = URL.createObjectURL(await res.blob());
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = segmentFileName(
+        recording?.filename ?? `enregistrement-${id}`,
+        startSec,
+        endSec,
+      );
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Extraction impossible');
+    } finally {
+      setSegmentBusy(false);
+    }
+  };
+
+  const shareSegment = async (startSec: number) => {
+    const url = `${pageUrl}?t=${formatTimeParam(startSec)}`;
+    try {
+      const outcome = await shareLink(url, recording?.filename);
+      if (outcome === 'copied') showToast('Lien copié');
+    } catch {
+      showToast('Partage impossible');
+    }
+  };
+
   const analysis = detail?.analysis ?? null;
   const timeline = analysis?.timeline ?? null;
   const analysisInProgress =
@@ -358,12 +475,19 @@ export function RecordingPage() {
 
   return (
     <div className={recording ? 'pb-40' : undefined}>
-      <Link
-        to={recording ? `/rehearsals/${recording.rehearsal_id}` : '/'}
-        className="text-sm text-zinc-500 hover:text-zinc-300"
-      >
-        ← Retour
-      </Link>
+      <div className="flex items-center justify-between gap-2">
+        <Link
+          to={recording ? `/rehearsals/${recording.rehearsal_id}` : '/'}
+          className="text-sm text-zinc-500 hover:text-zinc-300"
+        >
+          ← Retour
+        </Link>
+        <ShareButton
+          url={pageUrl}
+          title={recording?.filename}
+          label="Partager cet enregistrement"
+        />
+      </div>
 
       {error && <p className="mt-4 text-sm text-red-400">{error}</p>}
       {!detail && !error && (
@@ -530,6 +654,13 @@ export function RecordingPage() {
                       const d = e.currentTarget.duration;
                       setDuration(Number.isFinite(d) ? d : null);
                       e.currentTarget.playbackRate = playbackRate;
+                      const pending = pendingSeekRef.current;
+                      if (pending != null) {
+                        pendingSeekRef.current = null;
+                        e.currentTarget.currentTime = Number.isFinite(d)
+                          ? Math.min(pending, d)
+                          : pending;
+                      }
                     }}
                     onPlay={() => setIsPlaying(true)}
                     onPause={() => setIsPlaying(false)}
@@ -725,6 +856,10 @@ export function RecordingPage() {
                         onSeek={seekTo}
                         onScrub={scrubTo}
                         onEdit={editMode ? () => setEditingIndex(i) : undefined}
+                        onDownloadSegment={downloadSegment}
+                        onShareSegment={shareSegment}
+                        segmentBusy={segmentBusy}
+                        canDownloadSegment={online}
                       />
                     ),
                   )}
@@ -733,6 +868,14 @@ export function RecordingPage() {
             )}
           </section>
         </>
+      )}
+
+      {(segmentBusy || toast) && (
+        <div className="pointer-events-none fixed inset-x-0 bottom-32 z-40 flex justify-center px-4">
+          <span className="rounded-full border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs text-zinc-200 shadow-lg">
+            {segmentBusy ? 'Préparation de l’extrait…' : toast}
+          </span>
+        </div>
       )}
 
       {confirmingAnalyze && (
@@ -800,6 +943,71 @@ export function RecordingPage() {
   );
 }
 
+/**
+ * Menu « ⋮ » du passage sélectionné : extraire l'audio de la section, ou en
+ * partager le lien horodaté.
+ */
+function SegmentMenu({
+  onDownload,
+  onShare,
+  busy,
+  canDownload,
+}: {
+  onDownload: () => void;
+  onShare: () => void;
+  busy: boolean;
+  canDownload: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onClick = (e: MouseEvent) => {
+      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onClick);
+    return () => document.removeEventListener('mousedown', onClick);
+  }, [open]);
+
+  return (
+    <div ref={ref} className="relative mr-1 mt-1 shrink-0">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        title="Options du passage"
+        aria-label="Options du passage"
+        className="cursor-pointer rounded-md p-1 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
+      >
+        <DotsIcon />
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full z-40 mt-1 w-44 rounded-lg border border-zinc-700 bg-zinc-900 py-1 text-sm shadow-lg">
+          <button
+            onClick={() => {
+              setOpen(false);
+              onDownload();
+            }}
+            disabled={busy || !canDownload}
+            title={canDownload ? undefined : 'Indisponible hors-ligne'}
+            className="block w-full cursor-pointer px-3 py-2 text-left text-zinc-200 hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            Télécharger
+          </button>
+          <button
+            onClick={() => {
+              setOpen(false);
+              onShare();
+            }}
+            className="block w-full cursor-pointer px-3 py-2 text-left text-zinc-200 hover:bg-zinc-800"
+          >
+            Partager
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function TimelineRow({
   entry,
   active,
@@ -809,6 +1017,10 @@ function TimelineRow({
   onSeek,
   onScrub,
   onEdit,
+  onDownloadSegment,
+  onShareSegment,
+  segmentBusy,
+  canDownloadSegment,
 }: {
   entry: TimelineEntry;
   active: boolean;
@@ -818,6 +1030,10 @@ function TimelineRow({
   onSeek: (seconds: number) => void;
   onScrub: (seconds: number) => void;
   onEdit?: () => void;
+  onDownloadSegment: (startSec: number, endSec?: number) => void;
+  onShareSegment: (startSec: number) => void;
+  segmentBusy: boolean;
+  canDownloadSegment: boolean;
 }) {
   const ref = useRef<HTMLLIElement>(null);
 
@@ -876,10 +1092,18 @@ function TimelineRow({
             ✎
           </button>
         )}
+        {active && (
+          <SegmentMenu
+            busy={segmentBusy}
+            canDownload={canDownloadSegment}
+            onDownload={() => onDownloadSegment(entry.timecodeSec, sectionEnd)}
+            onShare={() => onShareSegment(entry.timecodeSec)}
+          />
+        )}
       </div>
       {showSlider && (
         <div
-          className={`flex items-center gap-2 px-3 pb-2 ${onEdit ? 'mr-7' : ''
+          className={`flex items-center gap-2 px-3 pb-2 ${onEdit ? 'mr-16' : 'mr-9'
             }`}
         >
           <input

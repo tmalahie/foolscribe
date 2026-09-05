@@ -10,11 +10,12 @@ function todayIso(): string {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 }
 
-/** Nom proposé selon la convention du groupe : « Répète du 24/9/25 ». */
+/** Nom proposé selon la convention du groupe : « Répète du 24/09/25 ». */
 function rehearsalNameForDate(iso: string): string {
   const [year, month, day] = iso.split('-').map(Number);
   if (!year || !month || !day) return '';
-  return `Répète du ${day}/${month}/${String(year).slice(2)}`;
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `Répète du ${pad(day)}/${pad(month)}/${String(year).slice(2)}`;
 }
 
 export function RehearsalsPage() {

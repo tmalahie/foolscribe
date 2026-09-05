@@ -105,3 +105,30 @@ export function formatDate(iso: string | null): string | null {
     year: 'numeric',
   });
 }
+
+/** Sérialise des secondes pour le paramètre `?t=` d'un lien partagé (« 1m30s »). */
+export function formatTimeParam(seconds: number): string {
+  const total = Math.max(0, Math.floor(seconds));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  const pad = (n: number) => n.toString().padStart(2, '0');
+  if (h > 0) return `${h}h${pad(m)}m${pad(s)}s`;
+  if (m > 0) return `${m}m${pad(s)}s`;
+  return `${s}s`;
+}
+
+/** Lit `?t=` : « 90 », « 90s », « 1m30s », « 1h02m30s » ou « 1:30 ». */
+export function parseTimeParam(raw: string | null | undefined): number | null {
+  if (!raw) return null;
+  const trimmed = raw.trim().toLowerCase();
+  const units = trimmed.match(/^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$/);
+  if (units && (units[1] || units[2] || units[3])) {
+    return (
+      Number(units[1] ?? 0) * 3600 +
+      Number(units[2] ?? 0) * 60 +
+      Number(units[3] ?? 0)
+    );
+  }
+  return parseTimecode(trimmed);
+}

@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api, ApiError, formatDate, formatSize, formatTimecode } from '../api';
 import { useAuth } from '../auth';
 import { ConfirmDialog } from '../components/ConfirmDialog';
+import { ShareButton } from '../components/ShareButton';
 import type { Recording, Rehearsal } from '../types';
 import { useOnline } from '../useOnline';
 
@@ -104,9 +105,16 @@ export function RehearsalPage() {
 
   return (
     <div>
-      <Link to="/" className="text-sm text-zinc-500 hover:text-zinc-300">
-        ← Répétitions
-      </Link>
+      <div className="flex items-center justify-between gap-2">
+        <Link to="/" className="text-sm text-zinc-500 hover:text-zinc-300">
+          ← Répétitions
+        </Link>
+        <ShareButton
+          url={`${window.location.origin}/rehearsals/${id}`}
+          title={rehearsal?.name}
+          label="Partager cette répète"
+        />
+      </div>
 
       {editing ? (
         <div className="mt-3 rounded-xl border border-zinc-800 bg-zinc-900 p-4">

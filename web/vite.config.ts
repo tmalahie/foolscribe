@@ -33,14 +33,16 @@ export default defineConfig({
       },
       workbox: {
         // L'app shell est précaché ; les données API déjà vues restent
-        // consultables hors-ligne (NetworkFirst). L'audio n'est jamais mis en
-        // cache par le SW : l'épinglage explicite (IndexedDB) s'en charge.
+        // consultables hors-ligne (NetworkFirst). L'audio (fichier complet
+        // comme extraits) n'est jamais mis en cache par le SW : l'épinglage
+        // explicite (IndexedDB) s'en charge.
         navigateFallbackDenylist: [/^\/api\//],
         runtimeCaching: [
           {
             urlPattern: ({ url, request }) =>
               url.pathname.startsWith('/api/') &&
               !url.pathname.endsWith('/audio') &&
+              !url.pathname.endsWith('/segment') &&
               request.method === 'GET',
             handler: 'NetworkFirst',
             options: {
