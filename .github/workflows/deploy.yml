@@ -1,0 +1,75 @@
+name: Deploy
+
+# Build sur un runner GitHub, le VPS ne fait plus que recevoir le build
+# et redémarrer pm2 (le `npm ci` + `vite build` saturaient sa RAM/CPU).
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      # Aligné sur le runtime du VPS (node v20.19.6 sous nvm) : on construit
+      # avec la version qui exécutera le code.
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Installer les dépendances (dev incluses)
+        run: npm ci
+
+      - name: Build web + server
+        run: npm run build
+
+      # On réinstalle un node_modules de production (racine + workspace server
+      # uniquement) : c'est lui qui part sur le VPS. Les deps du web ne servent
+      # qu'au build, seul web/dist est déployé.
+      - name: Réduire node_modules aux dépendances de production
+        run: |
+          rm -rf node_modules server/node_modules web/node_modules
+          npm ci --omit=dev --include-workspace-root --workspace server
+
+      - name: Configurer la clé SSH
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          printf '%s\n' "${{ secrets.DEPLOY_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Envoyer le build sur le VPS
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+        run: |
+          set -euo pipefail
+          SSH="ssh -i $HOME/.ssh/id_deploy -o IdentitiesOnly=yes -p ${DEPLOY_PORT:-22}"
+          REMOTE="$DEPLOY_USER@$DEPLOY_HOST"
+
+          # .deploy/ est un miroir persistant du build, dédié à la CI : rsync
+          # n'y transfère que les fichiers modifiés d'un déploiement à l'autre.
+          # --delete nettoie l'intérieur des chemins transférés (y compris les
+          # répertoires parents impliqués) — ne jamais viser $DEPLOY_PATH
+          # directement, ce sont les sources et le .env qui y passeraient.
+          $SSH "$REMOTE" "mkdir -p '$DEPLOY_PATH/.deploy'"
+
+          rsync -az --delete --relative -e "$SSH" \
+            package.json package-lock.json \
+            server/package.json server/dist \
+            web/package.json web/dist \
+            node_modules deploy \
+            "$REMOTE:$DEPLOY_PATH/.deploy/"
+
+          $SSH "$REMOTE" "bash '$DEPLOY_PATH/.deploy/deploy/release.sh' '$DEPLOY_PATH'"

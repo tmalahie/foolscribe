@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# Déploiement sur le serveur OVH (à lancer depuis la racine du repo, sur le serveur).
+# FALLBACK MANUEL — le déploiement normal passe par GitHub Actions
+# (.github/workflows/deploy.yml : build sur un runner, puis rsync + pm2 sur le
+# VPS via deploy/release.sh). Ce script-ci compile SUR le serveur : il sature
+# sa RAM/CPU et impacte les autres sites. À n'utiliser que si la CI est HS.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."

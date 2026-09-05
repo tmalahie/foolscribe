@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# À installer SUR le VPS dans /usr/local/sbin/foolscribe-pm2 (root:root, 0755) :
+#   scp deploy/foolscribe-pm2 ovh:/tmp/ && \
+#   ssh ovh 'install -o root -g root -m 755 /tmp/foolscribe-pm2 /usr/local/sbin/'
+#
+# pm2 tourne sous root (daemon /root/.pm2, binaires dans /root/.nvm en 0700).
+# Ce wrapper donne à l'utilisateur de déploiement le droit de piloter
+# UNIQUEMENT l'app foolscribe, via /etc/sudoers.d/foolscribe-deploy :
+#   timothe ALL=(root) NOPASSWD: /usr/local/sbin/foolscribe-pm2
+#
+# Les chemins sont volontairement en dur : ils ne doivent JAMAIS venir de
+# l'appelant, sinon la règle sudo permettrait de lancer n'importe quel
+# ecosystem.config.cjs en root.
+set -euo pipefail
+
+APP=/var/www/malahieude.net/foolscribe
+export NVM_DIR=/root/.nvm
+# shellcheck disable=SC1091
+. "$NVM_DIR/nvm.sh" >/dev/null
+
+case "${1:-}" in
+  restart)
+    cd "$APP"
+    exec pm2 startOrRestart deploy/ecosystem.config.cjs --update-env
+    ;;
+  logs)
+    exec pm2 logs foolscribe --lines "${2:-40}" --nostream
+    ;;
+  status)
+    exec pm2 describe foolscribe
+    ;;
+  *)
+    echo "usage: foolscribe-pm2 restart|logs [n]|status" >&2
+    exit 2
+    ;;
+esac

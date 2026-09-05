@@ -10,5 +10,8 @@ build/
 dev-dist/
 *.log
 
+# Miroir du build déposé par la CI sur le serveur (voir deploy/release.sh)
+.deploy/
+
 # OS
 .DS_Store
