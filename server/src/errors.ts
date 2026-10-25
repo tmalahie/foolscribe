@@ -28,6 +28,22 @@ export function errorMiddleware(
     res.status(err.status).json({ error: err.message });
     return;
   }
+  // Refresh token Drive expiré ou révoqué : seule une nouvelle autorisation
+  // du compte du groupe règle le problème. On ne logge pas l'erreur gaxios
+  // complète, qui contient le refresh token en clair.
+  if (isInvalidGrant(err)) {
+    console.error('Google Drive : refresh token expiré ou révoqué (invalid_grant)');
+    res.status(503).json({
+      error:
+        'Accès Google Drive expiré : relancer `npm run get-refresh-token` et mettre à jour GOOGLE_OAUTH_REFRESH_TOKEN',
+    });
+    return;
+  }
   console.error(err);
   res.status(500).json({ error: 'Erreur interne du serveur' });
+}
+
+function isInvalidGrant(err: unknown): boolean {
+  const data = (err as { response?: { data?: { error?: unknown } } } | null)?.response?.data;
+  return data?.error === 'invalid_grant';
 }
