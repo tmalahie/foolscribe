@@ -1,3 +1,4 @@
+import type { RowDataPacket } from 'mysql2';
 import mysql from 'mysql2/promise';
 import { config } from './config';
 
@@ -60,10 +61,52 @@ const SCHEMA = [
       REFERENCES recordings(id) ON DELETE CASCADE,
     INDEX idx_analyses_recording (recording_id)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
+  // Conversation du chat d'un enregistrement, partagée par tout le groupe.
+  `CREATE TABLE IF NOT EXISTS chat_messages (
+    id           INT AUTO_INCREMENT PRIMARY KEY,
+    recording_id INT NOT NULL,
+    role         ENUM('user','assistant') NOT NULL,
+    content      MEDIUMTEXT NOT NULL,
+    actions_json TEXT NULL,
+    author_email VARCHAR(255) NULL,
+    created_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_chat_messages_recording FOREIGN KEY (recording_id)
+      REFERENCES recordings(id) ON DELETE CASCADE,
+    INDEX idx_chat_messages_recording (recording_id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
+  // Réglages globaux clé/valeur (contexte du groupe…).
+  `CREATE TABLE IF NOT EXISTS settings (
+    name       VARCHAR(64) PRIMARY KEY,
+    value      MEDIUMTEXT NOT NULL,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+];
+
+// Colonnes ajoutées après coup à des tables existantes (MySQL n'a pas de
+// ADD COLUMN IF NOT EXISTS).
+const ADDED_COLUMNS = [
+  {
+    table: 'transcriptions',
+    column: 'original_words_json',
+    // Sortie Scribe d'origine, sauvegardée à la première correction manuelle.
+    definition: 'LONGTEXT NULL',
+  },
 ];
 
 export async function initDb(): Promise<void> {
   for (const statement of SCHEMA) {
     await pool.query(statement);
+  }
+  for (const { table, column, definition } of ADDED_COLUMNS) {
+    const [rows] = await pool.query<RowDataPacket[]>(
+      `SELECT 1 FROM information_schema.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?`,
+      [table, column],
+    );
+    if (rows.length === 0) {
+      await pool.query(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+    }
   }
 }

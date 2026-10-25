@@ -7,6 +7,7 @@ import { config } from './config';
 import { initDb } from './db';
 import { errorMiddleware } from './errors';
 import { authRouter } from './routes/auth';
+import { contextRouter } from './routes/context';
 import { recordingsRouter } from './routes/recordings';
 import { rehearsalsRouter } from './routes/rehearsals';
 import { syncRouter } from './routes/sync';
@@ -23,6 +24,7 @@ app.use('/api/auth', authRouter);
 app.use('/api/rehearsals', rehearsalsRouter);
 app.use('/api/recordings', recordingsRouter);
 app.use('/api/sync', syncRouter);
+app.use('/api/context', contextRouter);
 
 app.use('/api', (_req, res) => {
   res.status(404).json({ error: 'Route API inconnue' });

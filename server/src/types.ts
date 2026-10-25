@@ -24,6 +24,7 @@ export interface TranscriptionRow extends RowDataPacket {
   id: number;
   recording_id: number;
   words_json: string;
+  original_words_json: string | null;
   language: string | null;
   created_at: string;
 }
@@ -55,4 +56,14 @@ export interface Timeline {
   editedAt?: string;
   model: { stt: string; reasoning: string };
   entries: TimelineEntry[];
+}
+
+export interface ChatMessageRow extends RowDataPacket {
+  id: number;
+  recording_id: number;
+  role: 'user' | 'assistant';
+  content: string;
+  actions_json: string | null;
+  author_email: string | null;
+  created_at: string;
 }

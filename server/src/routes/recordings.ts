@@ -1,7 +1,8 @@
 import { spawn } from 'child_process';
 import { Router } from 'express';
 import type { Response } from 'express';
-import { requireAuth } from '../auth';
+import { requireAuth, sessionEmail } from '../auth';
+import { clearChat, listChatMessages, pendingTurn, startChatTurn } from '../chat';
 import { pool } from '../db';
 import { renameFile, trashFile } from '../drive';
 import { HttpError, wrap } from '../errors';
@@ -12,7 +13,8 @@ import {
   getRecordingOrThrow,
 } from '../recordingService';
 import { deleteObject, getObjectStream, presignGetUrl } from '../storage';
-import type { Timeline, TimelineEntry, TranscriptionRow } from '../types';
+import { editableAnalysis, normalizeEntry, saveTimelineEntries } from '../timeline';
+import type { Timeline, TranscriptionRow } from '../types';
 
 export const recordingsRouter = Router();
 
@@ -337,66 +339,17 @@ recordingsRouter.put(
   wrap(async (req, res) => {
     const id = parseInt(String(req.params.id), 10);
     await getRecordingOrThrow(id);
-    const analysis = await latestAnalysis(id);
-    if (!analysis || analysis.status !== 'done' || !analysis.timeline_json) {
-      throw new HttpError(409, 'Pas de timeline à modifier pour cet enregistrement');
-    }
+    const analysis = await editableAnalysis(id);
 
     const rawEntries = (req.body as { entries?: unknown }).entries;
     if (!Array.isArray(rawEntries)) {
       throw new HttpError(400, 'entries manquant');
     }
-    const entries: TimelineEntry[] = rawEntries.map((raw) => {
-      const e = raw as Partial<TimelineEntry>;
-      const timecodeSec = Math.floor(Number(e.timecodeSec));
-      if (!Number.isFinite(timecodeSec) || timecodeSec < 0) {
-        throw new HttpError(400, 'Timecode invalide');
-      }
-      if (e.type === 'music') {
-        const endSec =
-          e.endSec != null ? Math.floor(Number(e.endSec)) : undefined;
-        if (endSec != null && (!Number.isFinite(endSec) || endSec < timecodeSec)) {
-          throw new HttpError(400, 'Fin de passage musical invalide');
-        }
-        // Libellé optionnel (« refrain idée 2 »…)
-        const label =
-          typeof e.text === 'string' && e.text.trim() ? e.text.trim() : undefined;
-        return {
-          timecodeSec,
-          type: 'music',
-          ...(label ? { text: label } : {}),
-          ...(endSec != null ? { endSec } : {}),
-        };
-      }
-      if (e.type !== 'discussion') {
-        throw new HttpError(400, 'Type d\'entrée invalide');
-      }
-      const text = typeof e.text === 'string' ? e.text.trim() : '';
-      if (!text) throw new HttpError(400, 'Texte requis pour une entrée de discussion');
-      const speaker =
-        typeof e.speaker === 'string' && e.speaker.trim()
-          ? e.speaker.trim()
-          : undefined;
-      return {
-        timecodeSec,
-        type: 'discussion',
-        ...(speaker ? { speaker } : {}),
-        text,
-      };
-    });
-    entries.sort((a, b) => a.timecodeSec - b.timecodeSec);
-
-    const timeline = JSON.parse(analysis.timeline_json) as Timeline;
-    const updated: Timeline = {
-      ...timeline,
-      entries,
-      editedAt: new Date().toISOString(),
-    };
-    await pool.query('UPDATE analyses SET timeline_json = ? WHERE id = ?', [
-      JSON.stringify(updated),
-      analysis.id,
-    ]);
-    res.json({ timeline: updated });
+    const timeline = await saveTimelineEntries(
+      analysis,
+      rawEntries.map(normalizeEntry),
+    );
+    res.json({ timeline });
   }),
 );
 
@@ -418,5 +371,41 @@ recordingsRouter.post(
         timeline: null,
       },
     });
+  }),
+);
+
+/** Conversation partagée du chat de l'enregistrement (membres connectés). */
+recordingsRouter.get(
+  '/:id/chat',
+  requireAuth,
+  wrap(async (req, res) => {
+    const id = parseInt(String(req.params.id), 10);
+    await getRecordingOrThrow(id);
+    res.json({ messages: await listChatMessages(id), pending: pendingTurn(id) });
+  }),
+);
+
+recordingsRouter.post(
+  '/:id/chat',
+  requireAuth,
+  wrap(async (req, res) => {
+    const id = parseInt(String(req.params.id), 10);
+    const message = (req.body as { message?: unknown }).message;
+    if (typeof message !== 'string') throw new HttpError(400, 'message manquant');
+    await getRecordingOrThrow(id);
+    res.status(202).json({ pending: startChatTurn(id, sessionEmail(req)!, message) });
+  }),
+);
+
+recordingsRouter.delete(
+  '/:id/chat',
+  requireAuth,
+  wrap(async (req, res) => {
+    const id = parseInt(String(req.params.id), 10);
+    if (pendingTurn(id) && !pendingTurn(id)!.error) {
+      throw new HttpError(409, 'Une réponse est en cours');
+    }
+    await clearChat(id);
+    res.json({ ok: true });
   }),
 );

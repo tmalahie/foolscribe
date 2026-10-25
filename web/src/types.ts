@@ -52,3 +52,24 @@ export interface RecordingDetail {
   analysis: Analysis | null;
   transcriptionCached: boolean;
 }
+
+export interface ChatAction {
+  type: 'timeline' | 'transcript' | 'context';
+  summary: string;
+}
+
+export interface ChatMessage {
+  id: number;
+  role: 'user' | 'assistant';
+  content: string;
+  actions: ChatAction[];
+  authorEmail: string | null;
+  createdAt: string;
+}
+
+/** Tour en cours côté serveur (ou en échec, avec son erreur). */
+export interface PendingChatTurn {
+  content: string;
+  authorEmail: string;
+  error: string | null;
+}

@@ -1,5 +1,6 @@
 import { Link, Route, Routes } from 'react-router-dom';
 import { useAuth } from './auth';
+import { ContextPage } from './pages/ContextPage';
 import { RecordingPage } from './pages/RecordingPage';
 import { RehearsalPage } from './pages/RehearsalPage';
 import { RehearsalsPage } from './pages/RehearsalsPage';
@@ -24,6 +25,9 @@ export function App() {
             )}
             {email && (
               <>
+                <Link to="/context" className="text-zinc-400 hover:text-zinc-200">
+                  Contexte
+                </Link>
                 <span className="hidden text-zinc-400 sm:inline">{email}</span>
                 <button
                   onClick={() => void logout()}
@@ -41,6 +45,7 @@ export function App() {
           <Route path="/" element={<RehearsalsPage />} />
           <Route path="/rehearsals/:id" element={<RehearsalPage />} />
           <Route path="/recordings/:id" element={<RecordingPage />} />
+          <Route path="/context" element={<ContextPage />} />
         </Routes>
       </main>
     </div>

@@ -14,6 +14,7 @@ import {
   parseTimeParam,
 } from '../api';
 import { useAuth } from '../auth';
+import { ChatPanel } from '../components/ChatPanel';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { ShareButton } from '../components/ShareButton';
 import {
@@ -129,6 +130,7 @@ export function RecordingPage() {
   const [confirmingAnalyze, setConfirmingAnalyze] = useState(false);
   const [confirmingUnpin, setConfirmingUnpin] = useState(false);
   const [editMode, setEditMode] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [draftEntry, setDraftEntry] = useState<TimelineEntry | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -367,6 +369,11 @@ export function RecordingPage() {
       void refreshPinnedDetail(id, updated);
       return updated;
     });
+  };
+
+  const openChat = async () => {
+    if (!(await ensureAuth())) return;
+    setChatOpen(true);
   };
 
   const toggleEditMode = async () => {
@@ -796,6 +803,15 @@ export function RecordingPage() {
                         </button>
                       </>
                     )}
+                    {!editMode && detail?.transcriptionCached && (
+                      <button
+                        onClick={() => void openChat()}
+                        disabled={!online}
+                        className="rounded-lg border border-zinc-700 px-2.5 py-1 text-xs text-zinc-300 hover:bg-zinc-800 disabled:opacity-40"
+                      >
+                        Chat
+                      </button>
+                    )}
                     <button
                       onClick={() => void toggleEditMode()}
                       disabled={!online && !editMode}
@@ -877,6 +893,15 @@ export function RecordingPage() {
             {segmentBusy ? 'Préparation de l’extrait…' : toast}
           </span>
         </div>
+      )}
+
+      {chatOpen && (
+        <ChatPanel
+          recordingId={id}
+          onSeek={seekTo}
+          onChanged={load}
+          onClose={() => setChatOpen(false)}
+        />
       )}
 
       {confirmingAnalyze && (

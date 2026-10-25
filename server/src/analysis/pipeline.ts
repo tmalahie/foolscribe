@@ -21,6 +21,7 @@ import { execFile } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { promisify } from 'util';
+import { getBandContext } from '../bandContext';
 import { config } from '../config';
 import { pool } from '../db';
 import {
@@ -58,6 +59,11 @@ const MUSIC_BRIDGE_MAX_WORDS = 6;
 // fusionnent en un bloc mal horodaté.
 const SEGMENT_BREAK_SEC = 8;
 
+// Scribe étire parfois la fin d'un mot sur tout le passage joué qui suit
+// (rec 211 : « Merci » horodaté 33:11 → 36:32), ce qui masque le trou de
+// parole. Aucun mot réel ne dure plus que ça, même chanté et tenu.
+const MAX_WORD_DURATION_SEC = 4;
+
 // Les gros uploads multipart vers Scribe échouent par intermittence : au-dessus
 // de ce seuil on ré-encode en mp3 mono, bitrate adaptatif visant
 // TARGET_UPLOAD_MB. PAS de découpage en segments : le chunking casserait la
@@ -68,16 +74,21 @@ const TARGET_UPLOAD_MB = 14;
 const MIN_BITRATE_KBPS = 24;
 const MAX_BITRATE_KBPS = 96;
 
-const MUSICIANS =
+export const MUSICIANS =
   'un guitariste (Chris), un bassiste (Flavien), un batteur (Tristan), un claviériste (Tim) et une chanteuse (Jade)';
 
-interface Word {
+export interface Word {
   text: string;
   start?: number;
   end?: number;
   type: 'word' | 'spacing' | 'audio_event';
   // Le SDK ElevenLabs désérialise le champ wire `speaker_id` en camelCase.
   speakerId?: string;
+}
+
+/** Fin du mot, bornée (voir MAX_WORD_DURATION_SEC). */
+function wordEnd(word: Word & { start: number }): number {
+  return Math.min(word.end ?? word.start, word.start + MAX_WORD_DURATION_SEC);
 }
 
 export function formatTimecode(seconds: number): string {
@@ -233,7 +244,7 @@ export function detectMusicSpans(words: Word[], log: Logger): MusicSpan[] {
 
   const raw: MusicSpan[] = [];
   for (let i = 1; i < spoken.length; i++) {
-    const prevEnd = spoken[i - 1].end ?? spoken[i - 1].start;
+    const prevEnd = wordEnd(spoken[i - 1]);
     const nextStart = spoken[i].start;
     if (nextStart - prevEnd >= MUSIC_MIN_GAP_SEC) {
       raw.push({ start: prevEnd, end: nextStart });
@@ -313,7 +324,7 @@ function extendSpansOverSinging(
   const runs: WordRun[] = [];
   let current: WordRun | null = null;
   for (const w of spoken) {
-    const end = w.end ?? w.start;
+    const end = wordEnd(w);
     if (current && w.start - current.end >= SUNG_RUN_SPLIT_GAP_SEC) {
       runs.push(current);
       current = null;
@@ -394,7 +405,7 @@ interface Line {
  * discussion n'est pas de la musique). Chaque ligne porte son timecode en
  * secondes (t=Ns) pour que le LLM le recopie sans conversion.
  */
-function buildTranscript(words: Word[], musicSpans: MusicSpan[]): string {
+export function buildTranscript(words: Word[], musicSpans: MusicSpan[]): string {
   // Numérotés (#k) pour que le LLM puisse rattacher un libellé à un passage.
   const lines: Line[] = musicSpans.map((span, i) => ({
     start: span.start,
@@ -448,7 +459,10 @@ function buildTranscript(words: Word[], musicSpans: MusicSpan[]): string {
       currentStart = word.start;
     }
     buffer += word.text;
-    prevEnd = word.end ?? word.start ?? prevEnd;
+    prevEnd =
+      word.start != null
+        ? wordEnd(word as Word & { start: number })
+        : (word.end ?? prevEnd);
   }
   flush();
 
@@ -529,6 +543,7 @@ const TIMELINE_TOOL: Anthropic.Tool = {
  */
 async function generateDiscussionEntries(
   transcript: string,
+  bandContext: string,
 ): Promise<{ entries: DiscussionEntry[]; musicLabels: MusicLabel[] }> {
   const anthropic = new Anthropic({ apiKey: config.anthropicApiKey });
 
@@ -544,7 +559,13 @@ Consignes :
 - musicLabels : pour chaque passage [MUSIQUE #k] que le contexte permet d'identifier (les discussions avant/après disent ce qui va être ou vient d'être joué), fournis un libellé court et utile : quel morceau, quelle partie, quelle intention (ex. « 1er morceau en entier », « refrain idée 2 », « reprise depuis le pont »). Si le contexte ne permet pas d'identifier un passage, n'invente rien : omets-le simplement.
 - Prénoms : tu connais le rôle de chacun (${MUSICIANS}). Utilise le prénom quand la personne est identifiable de façon solide : elle est nommée ou interpellée dans l'échange, OU son rôle ne laisse aucun doute dans le contexte (celle qui chante ou parle de ses paroles = Jade ; celui qui parle de sa batterie = Tristan, etc.). N'écris jamais « la chanteuse » ou « le batteur » : mets le prénom. En revanche, ne déduis JAMAIS un prénom de la seule étiquette speaker_N (la diarisation rate parfois un musicien présent, ce qui décale tout le mapping) ; si l'identification reste incertaine, tourne la phrase de façon impersonnelle (« proposition d'ajouter un solo… ») — mieux vaut aucun prénom qu'un prénom faux.
 - Quand quelqu'un chantonne ou fredonne une mélodie pour illustrer un propos pendant une discussion, ce n'est PAS un passage musical ; ça fait partie de la discussion.
-
+- La transcription automatique confond les homophones : « l'idée de… » laissé en suspens est souvent « l'idée deux » (le groupe numérote ses morceaux en chantier « idée 1 », « idée 2 »…). Interprète d'après le contexte.
+- Nom de morceau : ne l'attribue à un passage que si la discussion qui l'entoure le désigne. Ne le propage pas automatiquement aux passages suivants : quand plusieurs morceaux ont été évoqués, vérifie pour chaque passage lequel est travaillé. Dans le doute, libellé générique (« travail sur la transition couplet → refrain »).
+${bandContext ? `
+--- CONTEXTE DU GROUPE (notes tenues par les musiciens, à jour) ---
+${bandContext}
+--- FIN CONTEXTE ---
+` : ''}
 --- TRANSCRIPTION ---
 ${transcript}
 --- FIN TRANSCRIPTION ---
@@ -582,6 +603,7 @@ export async function runPipeline(recordingId: number): Promise<Timeline> {
     console.log(`[analyse #${recordingId}] ${message}`);
 
   const words = await transcribe(recordingId);
+  const bandContext = await getBandContext();
   const musicSpans = detectMusicSpans(words, log);
   log(
     `passages joués retenus : ${
@@ -609,7 +631,7 @@ export async function runPipeline(recordingId: number): Promise<Timeline> {
 
   log(`Étage 2 — ${REASONING_MODEL} (raisonnement sur la transcription)…`);
   const { entries: discussionEntries, musicLabels } =
-    await generateDiscussionEntries(transcript);
+    await generateDiscussionEntries(transcript, bandContext);
   log(
     `Étage 2 terminé : ${discussionEntries.length} entrée(s) de discussion, ${musicLabels.length} passage(s) musique labellisé(s)${
       musicLabels.length
